@@ -9,19 +9,24 @@ It loads Three.js from the jsDelivr CDN, so you need an internet connection.
 
 ## Controls
 
-| Action | Keyboard | Gamepad |
-|---|---|---|
-| Move | A / D or ← → | Left stick / D-pad |
-| Aim up / diagonal | W / ↑ (+ direction) | Stick up |
-| Duck · drop through platform | S / ↓ (+ jump to drop) | Stick down |
-| Jump (hold for higher) | Space / Z | A |
-| Shoot (hold) | J / X | X / RT |
-| Dash (brief invulnerability) | Shift / L | B / RB |
-| Tempest Lance (full steam gauge) | K / V | Y |
-| Plant feet and aim in 8 directions | C | LB / LT |
-| Pause | Esc / P | Start |
+**Easy controls** are on by default (toggle on the title screen). Your cannon fires on its own and
+locks onto the boss, or onto the nearest torpedo, mine or drone that is getting close. You only move, jump and dodge.
 
-Touch controls appear automatically on phones and tablets.
+| Action | Keyboard | Phone / tablet | Gamepad |
+|---|---|---|---|
+| Move | A / D or ← → | Drag your left thumb anywhere on the left half | Left stick / D-pad |
+| Jump (hold for higher) | W / ↑ / Space | Push the stick up, or tap **JUMP** | A |
+| Duck · drop through a crate | S / ↓ | Pull the stick down | Stick down |
+| Dash (brief invulnerability) | Shift / L | **DASH** | B / RB |
+| Tempest Lance (gauge full) | K / V | **LANCE** (it glows when ready) | Y |
+| Pause | Esc / P | **II**, or the Android back button | Start |
+
+**Classic controls** (Easy off): hold J / X (or **FIRE**) to shoot. W / ↑ aims up instead of jumping, Space / Z jumps,
+and C plants your feet to aim in 8 directions.
+
+## Android app
+
+A ready-to-install APK is in [`../android/dist/EmberIronTide.apk`](../android/dist/EmberIronTide.apk). See [`../android/README.md`](../android/README.md).
 
 ## The fight
 
