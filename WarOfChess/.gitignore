@@ -1,0 +1,56 @@
+# ---------- Unity generated folders (never commit) ----------
+**/[Ll]ibrary/
+**/[Tt]emp/
+**/[Oo]bj/
+**/[Ll]ogs/
+**/[Uu]ser[Ss]ettings/
+**/[Mm]emoryCaptures/
+**/[Rr]ecordings/
+
+# ---------- Builds (never commit) ----------
+**/[Bb]uild/
+**/[Bb]uilds/
+*.apk
+*.aab
+*.ipa
+*.xcarchive
+*.dSYM
+*.dSYM.zip
+**/iOSBuild/
+**/AndroidBuild/
+
+# ---------- IDE / OS ----------
+.vs/
+.vscode/
+.idea/
+*.csproj
+*.sln
+*.suo
+*.user
+*.userprefs
+*.pidb
+*.booproj
+*.svd
+*.pdb
+*.mdb
+*.opendb
+*.VC.db
+.DS_Store
+.gradle/
+*.tmp
+
+# ---------- Unity crash / misc ----------
+sysinfo.txt
+crashlytics-build.properties
+**/Assets/AssetStoreTools*
+**/Assets/Plugins/Editor/JetBrains*
+
+# ---------- Secrets and signing (NEVER commit) ----------
+*.keystore
+*.jks
+*.p12
+*.mobileprovision
+*.cer
+*.certSigningRequest
+.env
+*.env

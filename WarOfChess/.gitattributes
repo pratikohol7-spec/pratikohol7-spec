@@ -1,0 +1,26 @@
+# Unity text assets: merge as text, keep LF line endings
+*.cs        text eol=lf diff=csharp
+*.shader    text eol=lf
+*.hlsl      text eol=lf
+*.json      text eol=lf
+*.md        text eol=lf
+*.sh        text eol=lf
+*.unity     text eol=lf merge=unityyamlmerge
+*.prefab    text eol=lf merge=unityyamlmerge
+*.asset     text eol=lf merge=unityyamlmerge
+*.mat       text eol=lf merge=unityyamlmerge
+*.anim      text eol=lf merge=unityyamlmerge
+*.controller text eol=lf merge=unityyamlmerge
+*.meta      text eol=lf merge=unityyamlmerge
+
+# Binary assets
+*.png  binary
+*.jpg  binary
+*.psd  binary
+*.fbx  binary
+*.blend binary
+*.wav  binary
+*.mp3  binary
+*.ogg  binary
+*.ttf  binary
+*.otf  binary
