@@ -138,17 +138,12 @@ int main(int argc, char **argv) {
   CHECK(drew("Real-world picks (17)"), "all 17 real-world picks are in this (simulated) game");
   CHECK(drew("Add-on vehicles (1)"), "add-on page lists only the installed add-on from SuperGarageV.ini");
 
-  printf("== Dodge Challenger shortcut and its V8 sound on every vehicle\n");
+  printf("== Dodge Challenger shortcut\n");
   CHECK(drew("Dodge Challenger (Gauntlet Hellfire)"), "Challenger is the first menu row");
+  CHECK(!drew("sound") && !drew("Sound"), "no sound-changing options in the menu");
   press(0x0D);
   CHECK(lastCreatedModel == (int)joaat("gauntlet4") && inVehicle == lastCreated, "Challenger row spawns the Gauntlet Hellfire with the player in it");
-  press(0x28); press(0x0D); tick(2);
-  CHECK(soundVehicle == inVehicle && !strcmp(soundOnVehicle, "gauntlet4"), "sound-everywhere ON: current vehicle gets the Challenger sound");
-  inVehicle = 3000; vehExists[3000] = 1; tick(2);
-  CHECK(soundVehicle == 3000 && !strcmp(soundOnVehicle, "gauntlet4"), "getting in another vehicle gives it the Challenger sound too");
-  press(0x0D); inVehicle = 0; soundVehicle = 0; soundOnVehicle[0] = 0; inVehicle = 3001; tick(2);
-  CHECK(soundVehicle == 0, "sound-everywhere OFF: other vehicles keep their own sound");
-  inVehicle = 0;
+  inVehicle = 3000; vehExists[3000] = 1; tick(3); inVehicle = 0;
 
   printf("== real-world picks\n");
   press(0x28); press(0x0D); tick(1);
@@ -182,20 +177,15 @@ int main(int argc, char **argv) {
   kbAnswer = "nosuchcar"; int before = lastCreated; press(0x0D); tick(12);
   CHECK(lastCreated == before, "unknown typed name: nothing spawned (player told)");
 
-  printf("== engine sound\n");
-  press(0x28); press(0x0D); tick(1);                    // row 5: Engine sound list
-  CHECK(drew("Own sound (default)"), "sound list opens with Own sound first");
-  press(0x28); press(0x0D); tick(1);                    // row 1 = first pick (nero)
-  CHECK(drew("Engine sound: Car NERO"), "chosen sound shown on the main page");
-  press(0x28); press(0x0D);                             // row 6: apply to current vehicle
-  CHECK(soundVehicle == inVehicle && !strcmp(soundOnVehicle, "nero"), "Apply: FORCE_USE_AUDIO_GAME_OBJECT(current vehicle, \"nero\")");
-  press(0x28); press(0x0D); press(0x28); press(0x0D);   // warp + delete OFF
-  for (int k = 0; k < 6; k++) press(0x26);              // row 8 -> row 2 (Super bikes)
+  printf("== options and bikes\n");
+  press(0x28); press(0x0D); press(0x28); press(0x0D);   // rows 6, 7: put-me-in and delete-previous OFF
+  for (int k = 0; k < 4; k++) press(0x26);              // row 7 -> row 3 (Super bikes)
   press(0x0D); press(0x0D);
-  CHECK(lastCreatedModel == (int)joaat("akuma") && soundVehicle == lastCreated && !strcmp(soundOnVehicle, "nero"), "new bike spawn gets the chosen engine sound");
+  CHECK(lastCreatedModel == (int)joaat("akuma"), "Super bikes page spawns the first bike");
   CHECK(inVehicle != lastCreated, "with 'Put me in vehicle' OFF the player stays outside");
   press(0x08); press(0x08); tick(2); drawnCount = 0; tick(1);
   CHECK(drawnCount == 0, "Back twice closes the menu");
+  CHECK(soundVehicle == 0 && soundOnVehicle[0] == 0, "the mod never changed any vehicle's sound (FORCE_USE_AUDIO_GAME_OBJECT never called)");
 
   CHECK(logFaults == 0, "no faults, missing imports or missing game commands logged by the port");
   CHECK(unknownHashes == 0, "every game command used is one the simulated world knows");

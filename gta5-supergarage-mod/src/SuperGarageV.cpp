@@ -4,8 +4,7 @@
 //    build actually contains: candidates are checked with IS_MODEL_IN_CDIMAGE and sorted by
 //    the class the game itself reports (GET_VEHICLE_CLASS_FROM_NAME).
 //  * Spawns the chosen vehicle in front of you and puts you in it.
-//  * Engine sound: each vehicle keeps its own game sound by default, or you can pick another
-//    game vehicle's engine sound (FORCE_USE_AUDIO_GAME_OBJECT), also for the car you're in.
+//  * Sound: never changed. Every vehicle keeps its own original engine sound.
 //
 // No C runtime; imports: six Script Hook V functions, GetModuleFileNameA,
 // GetPrivateProfileIntA, GetAsyncKeyState. No float compares (see Key note in PossessionV).
@@ -38,7 +37,6 @@ enum : UINT64 {
   GET_FILENAME_FOR_AUDIO_CONVERSATION = 0x7B5280EBA9840C72ull,  // returns a text label's localized text
   DOES_TEXT_LABEL_EXIST = 0xAC09CA973C564252ull,
   GET_OFFSET_FROM_ENTITY_IN_WORLD_COORDS = 0x1899F328B0E12848ull,
-  FORCE_USE_AUDIO_GAME_OBJECT = 0x4F0C413926060B38ull,
   GET_VEHICLE_PED_IS_IN = 0x9A9112A0FE9A4713ull,
   IS_PED_IN_ANY_VEHICLE = 0x997ABD671D25CA0Bull,
   SET_VEHICLE_ENGINE_ON = 0x2497C4717C8B881Eull,
@@ -159,7 +157,7 @@ static const char *DisplayName(const char *model) {
 // Settings.
 static HMODULE g_module;
 static int g_menuKey = 117;  // F6
-static bool g_warp = true, g_deletePrevious = true, g_challengerEverywhere = false;
+static bool g_warp = true, g_deletePrevious = true;
 static void LoadSettings() {
   DWORD n = GetModuleFileNameA(g_module, g_ini, sizeof g_ini - 5);
   if (n == 0 || n >= sizeof g_ini - 5) { const char *d = "SuperGarageV.ini"; int i = 0; for (; d[i]; i++) g_ini[i] = d[i]; g_ini[i] = 0; }
@@ -170,7 +168,6 @@ static void LoadSettings() {
   g_menuKey = (int)GetPrivateProfileIntA("Keys", "MenuKey", g_menuKey, g_ini);
   g_warp = GetPrivateProfileIntA("Spawn", "PutMeInVehicle", 1, g_ini) != 0;
   g_deletePrevious = GetPrivateProfileIntA("Spawn", "DeletePreviousSpawn", 1, g_ini) != 0;
-  g_challengerEverywhere = GetPrivateProfileIntA("Sound", "ChallengerSoundEverywhere", 0, g_ini) != 0;
 }
 
 static void Notify(const char *text) {
@@ -186,13 +183,8 @@ static void Text(const char *text, float x, float y, float scale, int c) {
 static void Rect(float x, float y, float w, float h, int r, int g, int b, int a) { Call(N::DRAW_RECT, x, y, w, h, r, g, b, a, false); }
 
 // ---------------------------------------------------------------------------------------
-// Spawning and sound.
+// Spawning. The mod never changes a vehicle's sound: each one keeps its own.
 static int g_lastSpawn;
-static const char *g_sound;  // 0: each vehicle's own sound; else a game vehicle's audio name
-
-static void ApplySound(int vehicle) {
-  if (g_sound && vehicle) Call(N::FORCE_USE_AUDIO_GAME_OBJECT, vehicle, g_sound);
-}
 
 static void Spawn(const char *name) {
   uint32_t model = Joaat(name);
@@ -218,7 +210,6 @@ static void Spawn(const char *name) {
   if (!vehicle) { Notify("SuperGarageV: the game couldn't create that vehicle."); return; }
   Call(N::SET_VEHICLE_ON_GROUND_PROPERLY, vehicle, 5.0f);
   Call(N::SET_VEHICLE_DIRT_LEVEL, vehicle, 0.0f);
-  ApplySound(vehicle);
   if (g_warp) { Call(N::SET_PED_INTO_VEHICLE, me, vehicle, -1); Call(N::SET_VEHICLE_ENGINE_ON, vehicle, true, true, false); }
   g_lastSpawn = vehicle;
   Notify("SuperGarageV: vehicle spawned.");
@@ -228,26 +219,6 @@ static void Spawn(const char *name) {
 // game build doesn't have the Hellfire.
 static const char *Challenger() { return ModelAvailable("gauntlet4") ? "gauntlet4" : "gauntlet"; }
 
-// "Challenger V8 sound on every vehicle": whenever you get in a different vehicle, it gets the
-// Challenger's engine sound.
-static int g_lastSounded;
-static void ChallengerSoundTick() {
-  if (!g_challengerEverywhere) { g_lastSounded = 0; return; }
-  int me = CallI(N::PLAYER_PED_ID);
-  if (!CallB(N::IS_PED_IN_ANY_VEHICLE, me, false)) { g_lastSounded = 0; return; }
-  int vehicle = CallI(N::GET_VEHICLE_PED_IS_IN, me, false);
-  if (!vehicle || vehicle == g_lastSounded) return;
-  Call(N::FORCE_USE_AUDIO_GAME_OBJECT, vehicle, Challenger());
-  g_lastSounded = vehicle;
-}
-
-static void SoundForCurrent() {
-  int me = CallI(N::PLAYER_PED_ID);
-  if (!CallB(N::IS_PED_IN_ANY_VEHICLE, me, false)) { Notify("SuperGarageV: get in a vehicle first."); return; }
-  if (!g_sound) { Notify("SuperGarageV: pick an engine sound first (Own sound = the car's default)."); return; }
-  ApplySound(CallI(N::GET_VEHICLE_PED_IS_IN, me, false));
-  Notify("SuperGarageV: engine sound applied to your vehicle.");
-}
 
 // Spawn by name: the game's text box, which the iOS port answers with the iPhone keyboard.
 static char g_typed[40];
@@ -266,25 +237,18 @@ static void SpawnByName() {
 
 // ---------------------------------------------------------------------------------------
 // Menu pages.
-enum Page { P_MAIN, P_PICKS, P_CARS, P_BIKES, P_ADDONS, P_SOUND };
-enum { M_CHALLENGER, M_CHSOUND, M_PICKS, M_CARS, M_BIKES, M_ADDONS, M_TYPE, M_SOUND, M_APPLY, M_WARP, M_DELETE, M_CLOSE, M_COUNT };
+enum Page { P_MAIN, P_PICKS, P_CARS, P_BIKES, P_ADDONS };
+enum { M_CHALLENGER, M_PICKS, M_CARS, M_BIKES, M_ADDONS, M_TYPE, M_WARP, M_DELETE, M_CLOSE, M_COUNT };
 static bool g_open; static Page g_page; static int g_sel, g_mainSel;
 static bool g_prev[256];
 static bool Pressed(int vk) {
   if (vk <= 0 || vk >= 256) return false;
   bool d = (GetAsyncKeyState(vk) & 0x8000) != 0, was = g_prev[vk]; g_prev[vk] = d; return d && !was;
 }
-static int SoundRows() { return 1 + g_pickCount + g_carCount + g_bikeCount; }
-static const char *SoundAt(int row) {  // 0: own sound
-  if (row == 0) return 0; row--;
-  if (row < g_pickCount) return kPicks[g_picks[row]].model; row -= g_pickCount;
-  if (row < g_carCount) return g_cars[row]; row -= g_carCount;
-  return g_bikes[row];
-}
 static int PageCount() {
   switch (g_page) {
     case P_PICKS: return g_pickCount; case P_CARS: return g_carCount; case P_BIKES: return g_bikeCount;
-    case P_ADDONS: return g_addonCount; case P_SOUND: return SoundRows(); default: return M_COUNT;
+    case P_ADDONS: return g_addonCount; default: return M_COUNT;
   }
 }
 
@@ -307,7 +271,7 @@ static void Draw() {
   const float x = 0.19f, w = 0.34f, rowH = 0.045f, top = 0.15f; const int rows = 12;
   const char *title = g_page == P_PICKS ? "SuperGarageV - Real-world picks" : g_page == P_CARS ? "SuperGarageV - Super cars"
                     : g_page == P_BIKES ? "SuperGarageV - Super bikes" : g_page == P_ADDONS ? "SuperGarageV - Add-on vehicles"
-                    : g_page == P_SOUND ? "SuperGarageV - Engine sound" : "SuperGarageV";
+                    : "SuperGarageV";
   Rect(x, top - rowH, w, rowH, 20, 60, 160, 230);
   Text(title, x - w / 2 + 0.01f, top - rowH - 0.02f, 0.5f, 255);
   int count = PageCount(), first = g_sel - rows / 2; if (first > count - rows) first = count - rows; if (first < 0) first = 0;
@@ -317,14 +281,11 @@ static void Draw() {
       case P_MAIN:
         switch (i) {
           case M_CHALLENGER: label = "Dodge Challenger (Gauntlet Hellfire)"; break;
-          case M_CHSOUND: label = g_challengerEverywhere ? "Challenger V8 sound on every vehicle: ON" : "Challenger V8 sound on every vehicle: OFF"; break;
           case M_PICKS: label = Num("Real-world picks", g_pickCount); break;
           case M_CARS: label = Num("Super cars", g_carCount); break;
           case M_BIKES: label = Num("Super bikes", g_bikeCount); break;
           case M_ADDONS: label = Num("Add-on vehicles", g_addonCount); break;
           case M_TYPE: label = "Spawn by name (keyboard)"; break;
-          case M_SOUND: label = Join("Engine sound: ", g_sound ? DisplayName(g_sound) : "each vehicle's own"); break;
-          case M_APPLY: label = "Apply engine sound to my vehicle"; break;
           case M_WARP: label = g_warp ? "Put me in spawned vehicle: ON" : "Put me in spawned vehicle: OFF"; break;
           case M_DELETE: label = g_deletePrevious ? "Delete previous spawn: ON" : "Delete previous spawn: OFF"; break;
           default: label = "Close menu"; break;
@@ -333,8 +294,7 @@ static void Draw() {
       case P_PICKS: label = PickLabel(g_picks[i]); break;
       case P_CARS: label = DisplayName(g_cars[i]); break;
       case P_BIKES: label = DisplayName(g_bikes[i]); break;
-      case P_ADDONS: label = Join(g_addons[i], ""); break;
-      default: { const char *s = SoundAt(i); label = s ? DisplayName(s) : "Own sound (default)"; } break;
+      default: label = Join(g_addons[i], ""); break;
     }
     float y = top + rowH * (float)row; bool sel = i == g_sel;
     Rect(x, y, w, rowH - 0.004f, sel ? 255 : 0, sel ? 255 : 0, sel ? 255 : 0, sel ? 220 : 170);
@@ -354,17 +314,11 @@ static void Select() {
       g_mainSel = g_sel;
       switch (g_sel) {
         case M_CHALLENGER: Spawn(Challenger()); break;
-        case M_CHSOUND:
-          g_challengerEverywhere = !g_challengerEverywhere; g_lastSounded = 0;
-          Notify(g_challengerEverywhere ? "SuperGarageV: every vehicle you drive gets the Challenger V8 sound." : "SuperGarageV: vehicles keep their own sound again (for new ones you get in).");
-          break;
         case M_PICKS: OpenPage(P_PICKS, g_pickCount, "SuperGarageV: none of the picks are in this game's files."); break;
         case M_CARS: OpenPage(P_CARS, g_carCount, "SuperGarageV: no super cars in this game's files."); break;
         case M_BIKES: OpenPage(P_BIKES, g_bikeCount, "SuperGarageV: no super bikes in this game's files."); break;
         case M_ADDONS: OpenPage(P_ADDONS, g_addonCount, "SuperGarageV: no add-on vehicles listed in SuperGarageV.ini (or not installed)."); break;
         case M_TYPE: SpawnByName(); break;
-        case M_SOUND: g_page = P_SOUND; g_sel = 0; break;
-        case M_APPLY: SoundForCurrent(); break;
         case M_WARP: g_warp = !g_warp; break;
         case M_DELETE: g_deletePrevious = !g_deletePrevious; break;
         default: g_open = false; break;
@@ -374,10 +328,6 @@ static void Select() {
     case P_CARS: Spawn(g_cars[g_sel]); break;
     case P_BIKES: Spawn(g_bikes[g_sel]); break;
     case P_ADDONS: Spawn(g_addons[g_sel]); break;
-    case P_SOUND:
-      g_sound = SoundAt(g_sel);
-      Notify(!g_sound ? "SuperGarageV: vehicles use their own engine sound." : "SuperGarageV: engine sound chosen; new spawns use it.");
-      g_page = P_MAIN; g_sel = M_SOUND; break;
   }
 }
 
@@ -406,7 +356,6 @@ static void ScriptMain() {
       if (g_open && !g_scanned) Scan();
     }
     if (g_open) MenuTick();
-    ChallengerSoundTick();
     scriptWait(0);
   }
 }
