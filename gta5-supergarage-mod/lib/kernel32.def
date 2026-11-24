@@ -2,3 +2,4 @@ LIBRARY KERNEL32.dll
 EXPORTS
 GetModuleFileNameA
 GetPrivateProfileIntA
+GetPrivateProfileStringA

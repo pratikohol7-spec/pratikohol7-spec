@@ -28,6 +28,7 @@ extern "C" {
 // KERNEL32.dll
 __declspec(dllimport) DWORD __stdcall GetModuleFileNameA(HMODULE module, char *fileName, DWORD size);
 __declspec(dllimport) UINT __stdcall GetPrivateProfileIntA(const char *app, const char *key, int def, const char *file);
+__declspec(dllimport) DWORD __stdcall GetPrivateProfileStringA(const char *app, const char *key, const char *def, char *out, DWORD size, const char *file);
 // USER32.dll
 __declspec(dllimport) short __stdcall GetAsyncKeyState(int vKey);
 }

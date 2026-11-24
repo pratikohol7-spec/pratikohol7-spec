@@ -8,7 +8,7 @@ from PossessionV, and both can be installed together.
 |---|---|
 | `src/` | Source (`SuperGarageV.cpp`, `shv.h`) and the default `SuperGarageV.ini` |
 | `build/` | Build output: `SuperGarageV.asi` |
-| `release/` | `SuperGarageV-1.0.zip` (install this) and `SuperGarageV.asi` |
+| `release/` | `SuperGarageV-1.1.zip` (install this) and `SuperGarageV.asi` |
 | `test/` | Static checks and an end-to-end run inside the port's interpreter |
 
 ## What it does
@@ -19,6 +19,32 @@ from PossessionV, and both can be installed together.
   and vehicles the game build doesn't have are left out. The vehicle class comes from
   `GET_VEHICLE_CLASS_FROM_NAME`: class 7 (Super) goes in the car list and class 8 (Motorcycles) in
   the bike list.
+- **Real-world picks:** the game's own vehicles whose designs are widely known to be based on the
+  real ones you asked for:
+
+  | Real vehicle | In-game vehicle (model) |
+  |---|---|
+  | Bugatti Chiron | Truffade Nero (`nero`, `nero2`) |
+  | Bugatti Veyron | Truffade Adder (`adder`) |
+  | Pagani Huayra | Pegassi Osiris (`osiris`) |
+  | Koenigsegg CCX / Agera | Överflöd Entity XF / Entity XXR (`entityxf`, `entity2`) |
+  | McLaren P1 / Senna / F1 | Progen T20 / Emerus / GP1 (`t20`, `emerus`, `gp1`) |
+  | Aston Martin Vanquish / One-77 | Dewbauchee Massacro / Seven-70 (`massacro`, `seven70`) |
+  | Bentley Continental GT | Enus Paragon R (`paragon`) |
+  | Dodge Challenger / Hellcat | Bravado Gauntlet / Gauntlet Hellfire (`gauntlet`, `gauntlet4`) |
+  | Suzuki Hayabusa | Shitzu Hakuchou / Hakuchou Drag (`hakuchou`, `hakuchou2`) |
+  | Ducati superbike | Pegassi Bati 801 (`bati`) |
+
+  These are game vehicles with game sounds, not licensed real cars. These had no clear in-game
+  counterpart, so they aren't on this page: Kawasaki Ninja H2/H2R, ZX-10R and Z900; BMW M4 and BMW
+  bikes; Royal Enfield Bullet; Benelli.
+- **Add-on vehicles:** if you install real-brand add-on cars or bikes yourself (`dlc.rpf` packs), put
+  their spawn names in `SuperGarageV.ini` under `[AddOns]` (`Vehicle1=` … `Vehicle32=`). They appear
+  on the **Add-on vehicles** page when the game has loaded them. Add-ons keep the engine sound their
+  author gave them. Note the port's v1.4.1 limit: an add-on that brings its own engine sound stops the
+  game at start (see below).
+- **Spawn by name (keyboard):** opens the game's text box, which the port answers with the iPhone
+  keyboard. Type any vehicle's spawn name, including add-ons.
 - **Engine sound:** by default each vehicle uses its own game engine sound. You can also pick any listed
   vehicle's engine sound (`FORCE_USE_AUDIO_GAME_OBJECT`). It applies to new spawns, and
   **Apply engine sound to my vehicle** sets it on the car you're sitting in.
@@ -46,7 +72,7 @@ at start (MODS.md); the port's next update is meant to load those sounds.
 
 ## Install
 
-1. Download `release/SuperGarageV-1.0.zip` on the iPhone.
+1. Download `release/SuperGarageV-1.1.zip` on the iPhone.
 2. **Settings › Mods › Install a mod…**, pick the ZIP, then close the game completely and start it again.
 3. In game, tap **🧩 Mods** and then **☰ F6**. You can add an on-screen F6 button in
    **Settings › Mods › SuperGarageV** (port v1.5+).
@@ -63,11 +89,11 @@ test/run_in_port_interpreter.sh <gta5-ios-port checkout>
 
 Verified here:
 - The `.asi` compiles with no errors or warnings.
-- Static checks pass: all 9 imports and all 34 natives are in the port's tables, and the binary has no
+- Static checks pass: all 10 imports and all 37 natives are in the port's tables, and the binary has no
   float-compare instructions.
 - It loads and runs in the port's own interpreter (built from its source on Linux) against a simulated
-  game world. It passes 20 checks: listing and class filtering, spawning cars and bikes, the previous
-  spawn handling, paging, sound choice and apply, and the menu.
+  game world. It passes 25 checks: class filtering, real-world picks, add-ons from the `.ini`, spawn by name
+  through the keyboard, previous-spawn handling, paging, sound choice and apply, and the menu.
 
 Not verified in the real game on an iPhone:
 - Which DLC vehicles your game files contain. The menu shows the real counts at run time.

@@ -53,6 +53,9 @@ enum : UINT64 {
   END_TEXT_COMMAND_DISPLAY_TEXT = 0xCD015E5BB0D96A57ull,
   BEGIN_TEXT_COMMAND_THEFEED_POST = 0x202709F4C58A0424ull,
   END_TEXT_COMMAND_THEFEED_POST_TICKER = 0x2ED7843F8F801023ull,
+  DISPLAY_ONSCREEN_KEYBOARD = 0x00DC833F2568DBF6ull,
+  UPDATE_ONSCREEN_KEYBOARD = 0x0CF2B696BBF945AEull,
+  GET_ONSCREEN_KEYBOARD_RESULT = 0x8362B09B91893647ull,
 };
 }
 
@@ -93,32 +96,68 @@ static const char *const kCandidates[] = {
   "shinobi", "powersurge", "sanchez", "sanchez2", "manchez", "esskey", "vindicator",
 };
 static const int kCount = (int)(sizeof kCandidates / sizeof *kCandidates);
-static short g_cars[128], g_bikes[128]; static int g_carCount, g_bikeCount; static bool g_scanned;
 
+// Real-world picks: the game's own vehicle whose design is widely known to be based on the
+// real one. Only well-known pairings; real vehicles with no clear in-game counterpart
+// (Kawasaki Ninja H2/H2R, ZX-10R, Z900, BMW M4 and BMW bikes, Royal Enfield Bullet,
+// Benelli) need an add-on model, which the Add-on page and Spawn by name handle.
+struct Pick { const char *label; const char *model; };
+static const Pick kPicks[] = {
+  {"Bugatti Chiron style", "nero"}, {"Bugatti Chiron style (custom)", "nero2"}, {"Bugatti Veyron style", "adder"},
+  {"Pagani Huayra style", "osiris"},
+  {"Koenigsegg CCX style", "entityxf"}, {"Koenigsegg Agera style", "entity2"},
+  {"McLaren P1 style", "t20"}, {"McLaren Senna style", "emerus"}, {"McLaren F1 style", "gp1"},
+  {"Aston Martin Vanquish style", "massacro"}, {"Aston Martin One-77 style", "seven70"},
+  {"Bentley Continental GT style", "paragon"},
+  {"Dodge Challenger style", "gauntlet"}, {"Dodge Challenger Hellcat style", "gauntlet4"},
+  {"Suzuki Hayabusa style", "hakuchou"}, {"Suzuki Hayabusa drag style", "hakuchou2"},
+  {"Ducati superbike style", "bati"},
+};
+static const int kPickCount = (int)(sizeof kPicks / sizeof *kPicks);
+
+static const char *g_cars[128], *g_bikes[128]; static int g_carCount, g_bikeCount;
+static short g_picks[64]; static int g_pickCount;
+static char g_addonNames[32][32]; static const char *g_addons[32]; static int g_addonCount;
+static bool g_scanned;
+static char g_ini[300];
+
+static bool ModelAvailable(const char *model) {
+  uint32_t h = Joaat(model);
+  return CallB(N::IS_MODEL_IN_CDIMAGE, h) && CallB(N::IS_MODEL_A_VEHICLE, h);
+}
 static void Scan() {
-  g_scanned = true; g_carCount = g_bikeCount = 0;
+  g_scanned = true; g_carCount = g_bikeCount = g_pickCount = g_addonCount = 0;
   for (int i = 0; i < kCount; i++) {
-    uint32_t h = Joaat(kCandidates[i]);
-    if (!CallB(N::IS_MODEL_IN_CDIMAGE, h) || !CallB(N::IS_MODEL_A_VEHICLE, h)) continue;
-    int cls = CallI(N::GET_VEHICLE_CLASS_FROM_NAME, h);
-    if (cls == 7 && g_carCount < 128) g_cars[g_carCount++] = (short)i;
-    else if (cls == 8 && g_bikeCount < 128) g_bikes[g_bikeCount++] = (short)i;
+    if (!ModelAvailable(kCandidates[i])) continue;
+    int cls = CallI(N::GET_VEHICLE_CLASS_FROM_NAME, Joaat(kCandidates[i]));
+    if (cls == 7 && g_carCount < 128) g_cars[g_carCount++] = kCandidates[i];
+    else if (cls == 8 && g_bikeCount < 128) g_bikes[g_bikeCount++] = kCandidates[i];
+  }
+  for (int i = 0; i < kPickCount; i++) if (ModelAvailable(kPicks[i].model) && g_pickCount < 64) g_picks[g_pickCount++] = (short)i;
+  // [AddOns] Vehicle1=...Vehicle32=: spawn names of add-on vehicles you installed yourself.
+  char key[16] = "Vehicle";
+  for (int n = 1; n <= 32; n++) {
+    int k = 7; if (n >= 10) key[k++] = (char)('0' + n / 10); key[k++] = (char)('0' + n % 10); key[k] = 0;
+    char *out = g_addonNames[g_addonCount < 32 ? g_addonCount : 31];
+    DWORD len = GetPrivateProfileStringA("AddOns", key, "", out, 32, g_ini);
+    if (len == 0 || !out[0] || g_addonCount >= 32) continue;
+    if (ModelAvailable(out)) { g_addons[g_addonCount] = out; g_addonCount++; }
   }
 }
 
-// The in-game name ("Pegassi Zentorno" shows as "Zentorno"), falling back to the model name.
-static const char *DisplayName(int index) {
-  const char *label = CallS(N::GET_DISPLAY_NAME_FROM_VEHICLE_MODEL, Joaat(kCandidates[index]));
+// The in-game name ("Truffade Nero" shows as "Nero"), falling back to the model name.
+static const char *DisplayName(const char *model) {
+  const char *label = CallS(N::GET_DISPLAY_NAME_FROM_VEHICLE_MODEL, Joaat(model));
   if (label && *label && !SameText(label, "CARNOTFOUND") && CallB(N::DOES_TEXT_LABEL_EXIST, label)) {
     const char *text = CallS(N::GET_FILENAME_FOR_AUDIO_CONVERSATION, label);
     if (text && *text && !SameText(text, "NULL")) return text;
   }
-  return kCandidates[index];
+  return model;
 }
 
 // ---------------------------------------------------------------------------------------
 // Settings.
-static HMODULE g_module; static char g_ini[300];
+static HMODULE g_module;
 static int g_menuKey = 117;  // F6
 static bool g_warp = true, g_deletePrevious = true;
 static void LoadSettings() {
@@ -148,16 +187,17 @@ static void Rect(float x, float y, float w, float h, int r, int g, int b, int a)
 // ---------------------------------------------------------------------------------------
 // Spawning and sound.
 static int g_lastSpawn;
-static int g_sound = -1;  // -1: each vehicle's own sound; else index into kCandidates
+static const char *g_sound;  // 0: each vehicle's own sound; else a game vehicle's audio name
 
 static void ApplySound(int vehicle) {
-  if (g_sound >= 0 && vehicle) Call(N::FORCE_USE_AUDIO_GAME_OBJECT, vehicle, kCandidates[g_sound]);
+  if (g_sound && vehicle) Call(N::FORCE_USE_AUDIO_GAME_OBJECT, vehicle, g_sound);
 }
 
-static void Spawn(int index) {
-  uint32_t model = Joaat(kCandidates[index]);
+static void Spawn(const char *name) {
+  uint32_t model = Joaat(name);
   int me = CallI(N::PLAYER_PED_ID);
   if (!CallB(N::DOES_ENTITY_EXIST, me) || CallB(N::IS_ENTITY_DEAD, me, false)) return;
+  if (!ModelAvailable(name)) { Notify("SuperGarageV: that vehicle isn't in this game's files."); return; }
   Call(N::REQUEST_MODEL, model);
   for (int tries = 0; !CallB(N::HAS_MODEL_LOADED, model); tries++) {
     if (tries >= 250) { Notify("SuperGarageV: the vehicle didn't load in time (game files streaming?)."); return; }
@@ -186,73 +226,118 @@ static void Spawn(int index) {
 static void SoundForCurrent() {
   int me = CallI(N::PLAYER_PED_ID);
   if (!CallB(N::IS_PED_IN_ANY_VEHICLE, me, false)) { Notify("SuperGarageV: get in a vehicle first."); return; }
-  if (g_sound < 0) { Notify("SuperGarageV: pick an engine sound first (Own sound = the car's default)."); return; }
+  if (!g_sound) { Notify("SuperGarageV: pick an engine sound first (Own sound = the car's default)."); return; }
   ApplySound(CallI(N::GET_VEHICLE_PED_IS_IN, me, false));
   Notify("SuperGarageV: engine sound applied to your vehicle.");
 }
 
+// Spawn by name: the game's text box, which the iOS port answers with the iPhone keyboard.
+static char g_typed[40];
+static void SpawnByName() {
+  Call(N::DISPLAY_ONSCREEN_KEYBOARD, 0, "FMMC_KEY_TIP8", "", "", "", "", "", 32);
+  int state;
+  while ((state = CallI(N::UPDATE_ONSCREEN_KEYBOARD)) == 0) scriptWait(0);
+  if (state != 1) return;  // cancelled
+  const char *text = CallS(N::GET_ONSCREEN_KEYBOARD_RESULT);
+  int n = 0;
+  for (; text && text[n] && n < (int)sizeof g_typed - 1; n++) g_typed[n] = text[n] == ' ' ? '_' : text[n];
+  g_typed[n] = 0;
+  if (!n) return;
+  Spawn(g_typed);
+}
+
 // ---------------------------------------------------------------------------------------
-// Menu: main page, car list, bike list, sound list.
-enum Page { P_MAIN, P_CARS, P_BIKES, P_SOUND };
-enum { M_CARS, M_BIKES, M_SOUND, M_APPLY, M_WARP, M_DELETE, M_CLOSE, M_COUNT };
+// Menu pages.
+enum Page { P_MAIN, P_PICKS, P_CARS, P_BIKES, P_ADDONS, P_SOUND };
+enum { M_PICKS, M_CARS, M_BIKES, M_ADDONS, M_TYPE, M_SOUND, M_APPLY, M_WARP, M_DELETE, M_CLOSE, M_COUNT };
 static bool g_open; static Page g_page; static int g_sel, g_mainSel;
 static bool g_prev[256];
 static bool Pressed(int vk) {
   if (vk <= 0 || vk >= 256) return false;
   bool d = (GetAsyncKeyState(vk) & 0x8000) != 0, was = g_prev[vk]; g_prev[vk] = d; return d && !was;
 }
-static int PageCount() {
-  switch (g_page) { case P_CARS: return g_carCount; case P_BIKES: return g_bikeCount; case P_SOUND: return g_carCount + g_bikeCount + 1; default: return M_COUNT; }
+static int SoundRows() { return 1 + g_pickCount + g_carCount + g_bikeCount; }
+static const char *SoundAt(int row) {  // 0: own sound
+  if (row == 0) return 0; row--;
+  if (row < g_pickCount) return kPicks[g_picks[row]].model; row -= g_pickCount;
+  if (row < g_carCount) return g_cars[row]; row -= g_carCount;
+  return g_bikes[row];
 }
-static int SoundIndexAt(int row) { return row == 0 ? -1 : row - 1 < g_carCount ? g_cars[row - 1] : g_bikes[row - 1 - g_carCount]; }
+static int PageCount() {
+  switch (g_page) {
+    case P_PICKS: return g_pickCount; case P_CARS: return g_carCount; case P_BIKES: return g_bikeCount;
+    case P_ADDONS: return g_addonCount; case P_SOUND: return SoundRows(); default: return M_COUNT;
+  }
+}
 
-static char g_line[128];
+static char g_line[160];
 static const char *Join(const char *a, const char *b) {
-  int o = 0; for (; *a && o < 126; a++) g_line[o++] = *a; for (; *b && o < 126; b++) g_line[o++] = *b; g_line[o] = 0; return g_line;
+  int o = 0; for (; *a && o < 158; a++) g_line[o++] = *a; for (; *b && o < 158; b++) g_line[o++] = *b; g_line[o] = 0; return g_line;
 }
 static const char *Num(const char *label, int n) {
   char digits[12]; int k = 0; if (n == 0) digits[k++] = '0'; while (n > 0 && k < 11) { digits[k++] = (char)('0' + n % 10); n /= 10; }
   char tail[16]; int t = 0; tail[t++] = ' '; tail[t++] = '('; while (k) tail[t++] = digits[--k]; tail[t++] = ')'; tail[t] = 0;
   return Join(label, tail);
 }
+static const char *PickLabel(int i) {
+  static char buf[160]; const char *a = kPicks[i].label, *b = DisplayName(kPicks[i].model); int o = 0;
+  for (; *a && o < 120; a++) buf[o++] = *a; buf[o++] = ':'; buf[o++] = ' ';
+  for (; *b && o < 158; b++) buf[o++] = *b; buf[o] = 0; return buf;
+}
 
 static void Draw() {
-  const float x = 0.18f, w = 0.32f, rowH = 0.045f, top = 0.15f; const int rows = 12;
-  const char *title = g_page == P_CARS ? "SuperGarageV - Super cars" : g_page == P_BIKES ? "SuperGarageV - Super bikes" : g_page == P_SOUND ? "SuperGarageV - Engine sound" : "SuperGarageV";
+  const float x = 0.19f, w = 0.34f, rowH = 0.045f, top = 0.15f; const int rows = 12;
+  const char *title = g_page == P_PICKS ? "SuperGarageV - Real-world picks" : g_page == P_CARS ? "SuperGarageV - Super cars"
+                    : g_page == P_BIKES ? "SuperGarageV - Super bikes" : g_page == P_ADDONS ? "SuperGarageV - Add-on vehicles"
+                    : g_page == P_SOUND ? "SuperGarageV - Engine sound" : "SuperGarageV";
   Rect(x, top - rowH, w, rowH, 20, 60, 160, 230);
   Text(title, x - w / 2 + 0.01f, top - rowH - 0.02f, 0.5f, 255);
   int count = PageCount(), first = g_sel - rows / 2; if (first > count - rows) first = count - rows; if (first < 0) first = 0;
   for (int i = first, row = 0; i < count && row < rows; i++, row++) {
     const char *label;
-    if (g_page == P_MAIN) {
-      switch (i) {
-        case M_CARS: label = Num("Super cars", g_carCount); break;
-        case M_BIKES: label = Num("Super bikes", g_bikeCount); break;
-        case M_SOUND: label = Join("Engine sound: ", g_sound < 0 ? "each vehicle's own" : DisplayName(g_sound)); break;
-        case M_APPLY: label = "Apply engine sound to my vehicle"; break;
-        case M_WARP: label = g_warp ? "Put me in spawned vehicle: ON" : "Put me in spawned vehicle: OFF"; break;
-        case M_DELETE: label = g_deletePrevious ? "Delete previous spawn: ON" : "Delete previous spawn: OFF"; break;
-        default: label = "Close menu"; break;
-      }
-    } else if (g_page == P_SOUND) {
-      int s = SoundIndexAt(i); label = s < 0 ? "Own sound (default)" : DisplayName(s);
-    } else label = DisplayName(g_page == P_CARS ? g_cars[i] : g_bikes[i]);
+    switch (g_page) {
+      case P_MAIN:
+        switch (i) {
+          case M_PICKS: label = Num("Real-world picks", g_pickCount); break;
+          case M_CARS: label = Num("Super cars", g_carCount); break;
+          case M_BIKES: label = Num("Super bikes", g_bikeCount); break;
+          case M_ADDONS: label = Num("Add-on vehicles", g_addonCount); break;
+          case M_TYPE: label = "Spawn by name (keyboard)"; break;
+          case M_SOUND: label = Join("Engine sound: ", g_sound ? DisplayName(g_sound) : "each vehicle's own"); break;
+          case M_APPLY: label = "Apply engine sound to my vehicle"; break;
+          case M_WARP: label = g_warp ? "Put me in spawned vehicle: ON" : "Put me in spawned vehicle: OFF"; break;
+          case M_DELETE: label = g_deletePrevious ? "Delete previous spawn: ON" : "Delete previous spawn: OFF"; break;
+          default: label = "Close menu"; break;
+        }
+        break;
+      case P_PICKS: label = PickLabel(g_picks[i]); break;
+      case P_CARS: label = DisplayName(g_cars[i]); break;
+      case P_BIKES: label = DisplayName(g_bikes[i]); break;
+      case P_ADDONS: label = Join(g_addons[i], ""); break;
+      default: { const char *s = SoundAt(i); label = s ? DisplayName(s) : "Own sound (default)"; } break;
+    }
     float y = top + rowH * (float)row; bool sel = i == g_sel;
     Rect(x, y, w, rowH - 0.004f, sel ? 255 : 0, sel ? 255 : 0, sel ? 255 : 0, sel ? 220 : 170);
-    Text(label, x - w / 2 + 0.01f, y - 0.016f, 0.38f, sel ? 0 : 255);
+    Text(label, x - w / 2 + 0.01f, y - 0.016f, 0.36f, sel ? 0 : 255);
   }
   int shown = count < rows ? count : rows;
   Text(g_page == P_MAIN ? "Up/Down move - Enter select - Back close" : "Up/Down move - Left/Right page - Enter select - Back",
        x - w / 2 + 0.01f, top + rowH * (float)shown - 0.014f, 0.28f, 230);
 }
 
+static void OpenPage(Page page, int count, const char *empty) {
+  if (count) { g_page = page; g_sel = 0; } else Notify(empty);
+}
 static void Select() {
   switch (g_page) {
     case P_MAIN:
       g_mainSel = g_sel;
       switch (g_sel) {
-        case M_CARS: if (g_carCount) { g_page = P_CARS; g_sel = 0; } else Notify("SuperGarageV: no super cars in this game's files."); break;
-        case M_BIKES: if (g_bikeCount) { g_page = P_BIKES; g_sel = 0; } else Notify("SuperGarageV: no super bikes in this game's files."); break;
+        case M_PICKS: OpenPage(P_PICKS, g_pickCount, "SuperGarageV: none of the picks are in this game's files."); break;
+        case M_CARS: OpenPage(P_CARS, g_carCount, "SuperGarageV: no super cars in this game's files."); break;
+        case M_BIKES: OpenPage(P_BIKES, g_bikeCount, "SuperGarageV: no super bikes in this game's files."); break;
+        case M_ADDONS: OpenPage(P_ADDONS, g_addonCount, "SuperGarageV: no add-on vehicles listed in SuperGarageV.ini (or not installed)."); break;
+        case M_TYPE: SpawnByName(); break;
         case M_SOUND: g_page = P_SOUND; g_sel = 0; break;
         case M_APPLY: SoundForCurrent(); break;
         case M_WARP: g_warp = !g_warp; break;
@@ -260,11 +345,13 @@ static void Select() {
         default: g_open = false; break;
       }
       break;
+    case P_PICKS: Spawn(kPicks[g_picks[g_sel]].model); break;
     case P_CARS: Spawn(g_cars[g_sel]); break;
     case P_BIKES: Spawn(g_bikes[g_sel]); break;
+    case P_ADDONS: Spawn(g_addons[g_sel]); break;
     case P_SOUND:
-      g_sound = SoundIndexAt(g_sel);
-      Notify(g_sound < 0 ? "SuperGarageV: vehicles use their own engine sound." : "SuperGarageV: engine sound chosen; new spawns use it.");
+      g_sound = SoundAt(g_sel);
+      Notify(!g_sound ? "SuperGarageV: vehicles use their own engine sound." : "SuperGarageV: engine sound chosen; new spawns use it.");
       g_page = P_MAIN; g_sel = M_SOUND; break;
   }
 }

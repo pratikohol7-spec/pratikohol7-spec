@@ -35,15 +35,19 @@ static const char *bikes[] = {"akuma", "bati", "bati2", "carbonrs", "double", "h
   "vader", "vortex", "defiler", "shotaro", "diablous2", "fcr", "fcr2", "pcj", "bf400", "thrust", "reever", "shinobi", "powersurge",
   "sanchez", "sanchez2", "manchez", "esskey", "vindicator"};
 static const char *missing[] = {"lm87", "pipistrello", "furia2", "fcr"};  // newer than this game build
+// other game vehicles used by the real-world picks, and one add-on installed by the player
+static const char *others[] = {"massacro", "seven70", "paragon", "gauntlet", "gauntlet4", "myaddonbike"};
 static const char *nameOf(uint32_t h) {
   for (size_t i = 0; i < sizeof cars / sizeof *cars; i++) if (joaat(cars[i]) == h) return cars[i];
   for (size_t i = 0; i < sizeof bikes / sizeof *bikes; i++) if (joaat(bikes[i]) == h) return bikes[i];
+  for (size_t i = 0; i < sizeof others / sizeof *others; i++) if (joaat(others[i]) == h) return others[i];
   return 0;
 }
 static bool exists(uint32_t h) { const char *n = nameOf(h); if (!n) return false; for (size_t i = 0; i < 4; i++) if (!strcmp(n, missing[i])) return false; return true; }
 static int classOf(uint32_t h) {
   const char *n = nameOf(h); if (!n) return -1;
   if (!strcmp(n, "sultanrs")) return 6;  // the game says Sports, not Super: must be left out
+  for (size_t i = 0; i < sizeof others / sizeof *others; i++) if (!strcmp(others[i], n)) return strcmp(n, "myaddonbike") ? 6 : 8;
   for (size_t i = 0; i < sizeof cars / sizeof *cars; i++) if (!strcmp(cars[i], n)) return 7;
   return 8;
 }
@@ -59,6 +63,7 @@ static int argi(uint64_t a, int i) { return (int)(uint32_t)arg(a, i); }
 static void ret(uint64_t r, uint64_t v) { memcpy(mem + r, &v, 8); }
 static const char *str(uint64_t a) { return a ? (const char *)mem + a : ""; }
 static int unknownHashes, notifications;
+static int kbState = 3; static char kbTitle[64]; static uint64_t kbBuf; static const char *kbAnswer = "MyAddonBike";
 
 static bool hostNative(uint64_t hash, uint64_t a, uint32_t n, uint64_t r) {
   (void)n;
@@ -91,6 +96,9 @@ static bool hostNative(uint64_t hash, uint64_t a, uint32_t n, uint64_t r) {
     case 0x25FBB336DF1804CBull: case 0x202709F4C58A0424ull: return true;
     case 0x6C188BE134E074AAull: snprintf(pending, sizeof pending, "%s", str(arg(a, 0))); return true;
     case 0xCD015E5BB0D96A57ull: if (drawnCount < 64) snprintf(drawn[drawnCount++], 128, "%s", pending); return true;
+    case 0x00DC833F2568DBF6ull: snprintf(kbTitle, sizeof kbTitle, "%s", str(arg(a, 1))); kbState = 0; return true;      // DISPLAY_ONSCREEN_KEYBOARD
+    case 0x0CF2B696BBF945AEull: ret(r, (uint32_t)kbState); if (kbState == 0 && frame % 4 == 3) kbState = 1; return true;  // UPDATE: player types for a few frames
+    case 0x8362B09B91893647ull: if (!kbBuf) kbBuf = hostAlloc(64); strcpy((char *)mem + kbBuf, kbAnswer); ret(r, kbState == 1 ? kbBuf : 0); return true;
     case 0x2ED7843F8F801023ull: notifications++; printf("[frame %3d] notification: %s\n", frame, pending); return true;
   }
   printf("[frame %3d] UNHANDLED native 0x%016llx\n", frame, (unsigned long long)hash); unknownHashes++; return false;
@@ -114,6 +122,8 @@ int main(int argc, char **argv) {
   uint8_t *bytes = malloc((size_t)st.st_size); if (read(fd, bytes, (size_t)st.st_size) != st.st_size) return 1; close(fd);
   const char *name = strrchr(argv[1], '/'); name = name ? name + 1 : argv[1];
 
+  char iniPath[1200]; snprintf(iniPath, sizeof iniPath, "%s/SuperGarageV.ini", argv[2]);
+  FILE *ini = fopen(iniPath, "a"); if (ini) { fputs("Vehicle1=myaddonbike\nVehicle2=notinstalled\n", ini); fclose(ini); }
   printf("== load\n");
   CHECK(pg_asi_load(name, argv[2], bytes, (uint64_t)st.st_size) > 0, "the port's loader accepts SuperGarageV.asi and runs DllMain");
   tick(5);
@@ -125,33 +135,52 @@ int main(int argc, char **argv) {
   CHECK(drew(want), "car count = models the game has in class Super (missing and non-Super models left out)");
   snprintf(want, sizeof want, "Super bikes (%d)", expectBikes);
   CHECK(drew(want), "bike count = models the game has in class Motorcycles");
+  CHECK(drew("Real-world picks (17)"), "all 17 real-world picks are in this (simulated) game");
+  CHECK(drew("Add-on vehicles (1)"), "add-on page lists only the installed add-on from SuperGarageV.ini");
 
-  printf("== spawn the first super car\n");
+  printf("== real-world picks\n");
   press(0x0D); tick(1);
-  CHECK(drew("Car ADDER"), "car list shows in-game names (label text)");
-  CHECK(!drew("Car SULTANRS"), "a Sports-class model is not listed as a super car");
+  CHECK(drew("Bugatti Chiron style: Car NERO"), "picks show the real-world style next to the in-game name");
   press(0x0D);
-  CHECK(lastCreatedModel == (int)joaat("adder") && inVehicle == lastCreated && engineOn == 1, "Adder created, player put in driver's seat, engine on");
-  CHECK(modelsReleased == 1, "model released after spawning");
-  int first = lastCreated;
-  press(0x28); press(0x0D);
-  CHECK(lastCreatedModel == (int)joaat("autarch") && released == first && vehExists[first], "next car: previous one kept (player was sitting in it) and handed back to the game");
-  int second = lastCreated; inVehicle = 0;  // player gets out
-  press(0x27); press(0x0D);
-  CHECK(!vehExists[second] && deleted == second, "spawning again after getting out deletes the previous spawn");
-  CHECK(lastCreatedModel == (int)joaat("furia"), "Right pages 10 entries down the list (row 1 -> row 11)");
+  CHECK(lastCreatedModel == (int)joaat("nero") && inVehicle == lastCreated && engineOn == 1, "Chiron pick spawns the Nero, player in driver's seat, engine on");
+  for (int k = 0; k < 11; k++) press(0x28);   // row 11 = Bentley Continental GT style
+  press(0x0D);
+  CHECK(lastCreatedModel == (int)joaat("paragon"), "Bentley pick spawns the Paragon R (non-Super class still allowed on this page)");
+  int bentley = lastCreated; inVehicle = 0;
+  press(0x08);
+
+  printf("== super cars list\n");
+  press(0x28); press(0x0D); tick(1);
+  CHECK(drew("Car ADDER") && !drew("Car SULTANRS"), "car list: in-game names, Sports-class model left out");
+  press(0x0D);
+  CHECK(lastCreatedModel == (int)joaat("adder") && !vehExists[bentley], "Adder spawned; previous spawn deleted (player had got out)");
+  int adder = lastCreated;
+  press(0x28); press(0x27); press(0x0D);
+  CHECK(lastCreatedModel == (int)joaat("furia") && vehExists[adder] && released == adder, "paging row 1 -> 11 spawns the Furia; Adder kept (player sat in it)");
+  press(0x08);
+
+  printf("== add-on vehicles and spawn by name (iPhone keyboard)\n");
+  press(0x28); press(0x28); press(0x0D); tick(1);
+  CHECK(drew("myaddonbike") && !drew("notinstalled"), "add-on page shows the installed add-on only");
+  press(0x0D);
+  CHECK(lastCreatedModel == (int)joaat("myaddonbike"), "add-on spawned by its spawn name from the .ini");
+  press(0x08); press(0x28); press(0x0D); tick(12);
+  CHECK(!strcmp(kbTitle, "FMMC_KEY_TIP8"), "Spawn by name opens the game's text box (the port shows the iPhone keyboard)");
+  CHECK(lastCreatedModel == (int)joaat("myaddonbike") && kbState == 1, "typed name (any case) spawned after the keyboard finished");
+  kbAnswer = "nosuchcar"; int before = lastCreated; press(0x0D); tick(12);
+  CHECK(lastCreated == before, "unknown typed name: nothing spawned (player told)");
 
   printf("== engine sound\n");
-  press(0x08); press(0x28); press(0x28); press(0x0D);  // main -> Engine sound list
-  tick(1); CHECK(drew("Own sound (default)"), "sound list opens with Own sound first");
-  press(0x28); press(0x28); press(0x0D);               // row 2 = second car (autarch)
-  tick(1); CHECK(drew("Engine sound: Car AUTARCH"), "chosen sound shown on the main page");
-  press(0x28); press(0x0D);                           // Apply to my vehicle (player is in the fmj)
-  CHECK(soundVehicle == inVehicle && !strcmp(soundOnVehicle, "autarch"), "Apply: FORCE_USE_AUDIO_GAME_OBJECT(current vehicle, \"autarch\")");
-  press(0x28); press(0x0D); press(0x28); press(0x0D);  // toggle warp + delete (both off)
-  press(0x26); press(0x26); press(0x26); press(0x26);  // row 5 -> row 1 (Super bikes)
+  press(0x28); press(0x0D); tick(1);                    // row 5: Engine sound list
+  CHECK(drew("Own sound (default)"), "sound list opens with Own sound first");
+  press(0x28); press(0x0D); tick(1);                    // row 1 = first pick (nero)
+  CHECK(drew("Engine sound: Car NERO"), "chosen sound shown on the main page");
+  press(0x28); press(0x0D);                             // row 6: apply to current vehicle
+  CHECK(soundVehicle == inVehicle && !strcmp(soundOnVehicle, "nero"), "Apply: FORCE_USE_AUDIO_GAME_OBJECT(current vehicle, \"nero\")");
+  press(0x28); press(0x0D); press(0x28); press(0x0D);   // warp + delete OFF
+  for (int k = 0; k < 6; k++) press(0x26);              // row 8 -> row 2 (Super bikes)
   press(0x0D); press(0x0D);
-  CHECK(lastCreatedModel == (int)joaat("akuma") && soundVehicle == lastCreated && !strcmp(soundOnVehicle, "autarch"), "new spawn (bike) gets the chosen engine sound");
+  CHECK(lastCreatedModel == (int)joaat("akuma") && soundVehicle == lastCreated && !strcmp(soundOnVehicle, "nero"), "new bike spawn gets the chosen engine sound");
   CHECK(inVehicle != lastCreated, "with 'Put me in vehicle' OFF the player stays outside");
   press(0x08); press(0x08); tick(2); drawnCount = 0; tick(1);
   CHECK(drawnCount == 0, "Back twice closes the menu");
