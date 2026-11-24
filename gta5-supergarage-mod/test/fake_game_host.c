@@ -138,11 +138,23 @@ int main(int argc, char **argv) {
   CHECK(drew("Real-world picks (17)"), "all 17 real-world picks are in this (simulated) game");
   CHECK(drew("Add-on vehicles (1)"), "add-on page lists only the installed add-on from SuperGarageV.ini");
 
+  printf("== Dodge Challenger shortcut and its V8 sound on every vehicle\n");
+  CHECK(drew("Dodge Challenger (Gauntlet Hellfire)"), "Challenger is the first menu row");
+  press(0x0D);
+  CHECK(lastCreatedModel == (int)joaat("gauntlet4") && inVehicle == lastCreated, "Challenger row spawns the Gauntlet Hellfire with the player in it");
+  press(0x28); press(0x0D); tick(2);
+  CHECK(soundVehicle == inVehicle && !strcmp(soundOnVehicle, "gauntlet4"), "sound-everywhere ON: current vehicle gets the Challenger sound");
+  inVehicle = 3000; vehExists[3000] = 1; tick(2);
+  CHECK(soundVehicle == 3000 && !strcmp(soundOnVehicle, "gauntlet4"), "getting in another vehicle gives it the Challenger sound too");
+  press(0x0D); inVehicle = 0; soundVehicle = 0; soundOnVehicle[0] = 0; inVehicle = 3001; tick(2);
+  CHECK(soundVehicle == 0, "sound-everywhere OFF: other vehicles keep their own sound");
+  inVehicle = 0;
+
   printf("== real-world picks\n");
-  press(0x0D); tick(1);
+  press(0x28); press(0x0D); tick(1);
   CHECK(drew("Bugatti Chiron style: Car NERO"), "picks show the real-world style next to the in-game name");
   press(0x0D);
-  CHECK(lastCreatedModel == (int)joaat("nero") && inVehicle == lastCreated && engineOn == 1, "Chiron pick spawns the Nero, player in driver's seat, engine on");
+  CHECK(lastCreatedModel == (int)joaat("nero") && inVehicle == lastCreated && engineOn == 2, "Chiron pick spawns the Nero, player in driver's seat, engine on");
   for (int k = 0; k < 11; k++) press(0x28);   // row 11 = Bentley Continental GT style
   press(0x0D);
   CHECK(lastCreatedModel == (int)joaat("paragon"), "Bentley pick spawns the Paragon R (non-Super class still allowed on this page)");

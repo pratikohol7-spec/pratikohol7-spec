@@ -159,7 +159,7 @@ static const char *DisplayName(const char *model) {
 // Settings.
 static HMODULE g_module;
 static int g_menuKey = 117;  // F6
-static bool g_warp = true, g_deletePrevious = true;
+static bool g_warp = true, g_deletePrevious = true, g_challengerEverywhere = false;
 static void LoadSettings() {
   DWORD n = GetModuleFileNameA(g_module, g_ini, sizeof g_ini - 5);
   if (n == 0 || n >= sizeof g_ini - 5) { const char *d = "SuperGarageV.ini"; int i = 0; for (; d[i]; i++) g_ini[i] = d[i]; g_ini[i] = 0; }
@@ -170,6 +170,7 @@ static void LoadSettings() {
   g_menuKey = (int)GetPrivateProfileIntA("Keys", "MenuKey", g_menuKey, g_ini);
   g_warp = GetPrivateProfileIntA("Spawn", "PutMeInVehicle", 1, g_ini) != 0;
   g_deletePrevious = GetPrivateProfileIntA("Spawn", "DeletePreviousSpawn", 1, g_ini) != 0;
+  g_challengerEverywhere = GetPrivateProfileIntA("Sound", "ChallengerSoundEverywhere", 0, g_ini) != 0;
 }
 
 static void Notify(const char *text) {
@@ -223,6 +224,23 @@ static void Spawn(const char *name) {
   Notify("SuperGarageV: vehicle spawned.");
 }
 
+// The Dodge Challenger look-alike: Bravado Gauntlet Hellfire, or the plain Gauntlet if this
+// game build doesn't have the Hellfire.
+static const char *Challenger() { return ModelAvailable("gauntlet4") ? "gauntlet4" : "gauntlet"; }
+
+// "Challenger V8 sound on every vehicle": whenever you get in a different vehicle, it gets the
+// Challenger's engine sound.
+static int g_lastSounded;
+static void ChallengerSoundTick() {
+  if (!g_challengerEverywhere) { g_lastSounded = 0; return; }
+  int me = CallI(N::PLAYER_PED_ID);
+  if (!CallB(N::IS_PED_IN_ANY_VEHICLE, me, false)) { g_lastSounded = 0; return; }
+  int vehicle = CallI(N::GET_VEHICLE_PED_IS_IN, me, false);
+  if (!vehicle || vehicle == g_lastSounded) return;
+  Call(N::FORCE_USE_AUDIO_GAME_OBJECT, vehicle, Challenger());
+  g_lastSounded = vehicle;
+}
+
 static void SoundForCurrent() {
   int me = CallI(N::PLAYER_PED_ID);
   if (!CallB(N::IS_PED_IN_ANY_VEHICLE, me, false)) { Notify("SuperGarageV: get in a vehicle first."); return; }
@@ -249,7 +267,7 @@ static void SpawnByName() {
 // ---------------------------------------------------------------------------------------
 // Menu pages.
 enum Page { P_MAIN, P_PICKS, P_CARS, P_BIKES, P_ADDONS, P_SOUND };
-enum { M_PICKS, M_CARS, M_BIKES, M_ADDONS, M_TYPE, M_SOUND, M_APPLY, M_WARP, M_DELETE, M_CLOSE, M_COUNT };
+enum { M_CHALLENGER, M_CHSOUND, M_PICKS, M_CARS, M_BIKES, M_ADDONS, M_TYPE, M_SOUND, M_APPLY, M_WARP, M_DELETE, M_CLOSE, M_COUNT };
 static bool g_open; static Page g_page; static int g_sel, g_mainSel;
 static bool g_prev[256];
 static bool Pressed(int vk) {
@@ -298,6 +316,8 @@ static void Draw() {
     switch (g_page) {
       case P_MAIN:
         switch (i) {
+          case M_CHALLENGER: label = "Dodge Challenger (Gauntlet Hellfire)"; break;
+          case M_CHSOUND: label = g_challengerEverywhere ? "Challenger V8 sound on every vehicle: ON" : "Challenger V8 sound on every vehicle: OFF"; break;
           case M_PICKS: label = Num("Real-world picks", g_pickCount); break;
           case M_CARS: label = Num("Super cars", g_carCount); break;
           case M_BIKES: label = Num("Super bikes", g_bikeCount); break;
@@ -333,6 +353,11 @@ static void Select() {
     case P_MAIN:
       g_mainSel = g_sel;
       switch (g_sel) {
+        case M_CHALLENGER: Spawn(Challenger()); break;
+        case M_CHSOUND:
+          g_challengerEverywhere = !g_challengerEverywhere; g_lastSounded = 0;
+          Notify(g_challengerEverywhere ? "SuperGarageV: every vehicle you drive gets the Challenger V8 sound." : "SuperGarageV: vehicles keep their own sound again (for new ones you get in).");
+          break;
         case M_PICKS: OpenPage(P_PICKS, g_pickCount, "SuperGarageV: none of the picks are in this game's files."); break;
         case M_CARS: OpenPage(P_CARS, g_carCount, "SuperGarageV: no super cars in this game's files."); break;
         case M_BIKES: OpenPage(P_BIKES, g_bikeCount, "SuperGarageV: no super bikes in this game's files."); break;
@@ -381,6 +406,7 @@ static void ScriptMain() {
       if (g_open && !g_scanned) Scan();
     }
     if (g_open) MenuTick();
+    ChallengerSoundTick();
     scriptWait(0);
   }
 }
