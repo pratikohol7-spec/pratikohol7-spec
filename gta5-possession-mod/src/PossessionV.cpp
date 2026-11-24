@@ -71,6 +71,16 @@ enum : UINT64 {
   BEGIN_TEXT_COMMAND_THEFEED_POST = 0x202709F4C58A0424ull,
   END_TEXT_COMMAND_THEFEED_POST_TICKER = 0x2ED7843F8F801023ull,
   GET_GAME_TIMER = 0x9CD27B0045628463ull,
+  GIVE_WEAPON_TO_PED = 0xBF0FD6E56C964FCBull,
+  IS_WEAPON_VALID = 0x937C71165CF334B3ull,
+  STAT_GET_INT = 0x767FBC2AC802EF3Dull,
+  STAT_SET_INT = 0xB3271D7AB655B441ull,
+  GET_NAME_OF_ZONE = 0xCD90657D4C30E1CAull,
+  GET_PLAYER_WANTED_LEVEL = 0xE28E54788CE8F12Dull,
+  CLEAR_PLAYER_WANTED_LEVEL = 0xB302540597885499ull,
+  SET_MAX_WANTED_LEVEL = 0xAA5F02DB48D704B9ull,
+  SET_CLOCK_TIME = 0x47C3B5848C3E45D8ull,
+  GET_ENTITY_MODEL = 0x9F47B058362C84B5ull,
 };
 }
 
@@ -127,6 +137,10 @@ struct Settings {
   bool autoReturnOnDeath = true;
   bool unicornDoors = true;
   bool unicornInterior = true;
+  bool restrictedNoWanted = true;  // no wanted level inside Fort Zancudo, Humane Labs, the prison, LSIA
+  bool neverWanted = false;
+  bool autoWeapons = false;        // give all weapons to every body you possess
+  int moneyAmount = 1000000;
 } S;
 
 static void LoadSettings() {
@@ -145,6 +159,12 @@ static void LoadSettings() {
   S.autoReturnOnDeath = GetPrivateProfileIntA("Possession", "AutoReturnOnDeath", 1, g_ini) != 0;
   S.unicornDoors = GetPrivateProfileIntA("VanillaUnicorn", "UnlockDoors", 1, g_ini) != 0;
   S.unicornInterior = GetPrivateProfileIntA("VanillaUnicorn", "EnableInterior", 1, g_ini) != 0;
+  S.restrictedNoWanted = GetPrivateProfileIntA("Unlocks", "RestrictedAreasNoWanted", 1, g_ini) != 0;
+  S.neverWanted = GetPrivateProfileIntA("Unlocks", "NeverWanted", 0, g_ini) != 0;
+  S.autoWeapons = GetPrivateProfileIntA("Unlocks", "AutoGiveWeapons", 0, g_ini) != 0;
+  S.moneyAmount = (int)GetPrivateProfileIntA("Unlocks", "MoneyAmount", S.moneyAmount, g_ini);
+  if (S.moneyAmount < 1) S.moneyAmount = 1;
+  if (S.moneyAmount > 100000000) S.moneyAmount = 100000000;
   if (S.maxDistance < 5) S.maxDistance = 5;
   if (S.maxDistance > 300) S.maxDistance = 300;
 }
@@ -228,6 +248,7 @@ static void RemoveOriginalBlip() {
   g_originalBlip = 0;
 }
 
+static void GiveAllWeapons(int ped, bool quiet);
 static void Possess(Kind kind) {
   int me = CallI(N::PLAYER_PED_ID);
   if (!Alive(me)) { Notify("PossessionV: you can't possess anyone while dead."); return; }
@@ -250,6 +271,7 @@ static void Possess(Kind kind) {
   if (first) { g_original = me; g_originalLostTold = false; ParkOriginal(me); }
   else ReleasePed(me);  // hopping from one possessed body to the next: let the old one go
   Notify(IsAnimal(target) ? "PossessionV: animal possessed." : "PossessionV: pedestrian possessed.");
+  if (S.autoWeapons && !IsAnimal(target)) GiveAllWeapons(target, true);
 }
 
 static void ReturnToOriginal(bool quiet) {
@@ -337,6 +359,79 @@ static void UnicornTick(int now) {
 }
 
 // ---------------------------------------------------------------------------------------
+// Unlocks: weapons, money, wanted level in restricted areas, time of day.
+static const char *const kWeapons[] = {
+  "WEAPON_KNIFE", "WEAPON_NIGHTSTICK", "WEAPON_HAMMER", "WEAPON_BAT", "WEAPON_GOLFCLUB", "WEAPON_CROWBAR",
+  "WEAPON_BOTTLE", "WEAPON_DAGGER", "WEAPON_HATCHET", "WEAPON_KNUCKLE", "WEAPON_MACHETE", "WEAPON_FLASHLIGHT",
+  "WEAPON_SWITCHBLADE", "WEAPON_POOLCUE", "WEAPON_WRENCH", "WEAPON_BATTLEAXE", "WEAPON_STONE_HATCHET",
+  "WEAPON_PISTOL", "WEAPON_PISTOL_MK2", "WEAPON_COMBATPISTOL", "WEAPON_APPISTOL", "WEAPON_PISTOL50",
+  "WEAPON_SNSPISTOL", "WEAPON_SNSPISTOL_MK2", "WEAPON_HEAVYPISTOL", "WEAPON_VINTAGEPISTOL", "WEAPON_MARKSMANPISTOL",
+  "WEAPON_REVOLVER", "WEAPON_REVOLVER_MK2", "WEAPON_DOUBLEACTION", "WEAPON_STUNGUN", "WEAPON_FLAREGUN",
+  "WEAPON_CERAMICPISTOL", "WEAPON_NAVYREVOLVER", "WEAPON_GADGETPISTOL", "WEAPON_RAYPISTOL",
+  "WEAPON_MICROSMG", "WEAPON_SMG", "WEAPON_SMG_MK2", "WEAPON_ASSAULTSMG", "WEAPON_COMBATPDW", "WEAPON_MACHINEPISTOL",
+  "WEAPON_MINISMG", "WEAPON_RAYCARBINE", "WEAPON_MG", "WEAPON_COMBATMG", "WEAPON_COMBATMG_MK2", "WEAPON_GUSENBERG",
+  "WEAPON_PUMPSHOTGUN", "WEAPON_PUMPSHOTGUN_MK2", "WEAPON_SAWNOFFSHOTGUN", "WEAPON_ASSAULTSHOTGUN",
+  "WEAPON_BULLPUPSHOTGUN", "WEAPON_HEAVYSHOTGUN", "WEAPON_DBSHOTGUN", "WEAPON_AUTOSHOTGUN", "WEAPON_MUSKET",
+  "WEAPON_COMBATSHOTGUN", "WEAPON_ASSAULTRIFLE", "WEAPON_ASSAULTRIFLE_MK2", "WEAPON_CARBINERIFLE",
+  "WEAPON_CARBINERIFLE_MK2", "WEAPON_ADVANCEDRIFLE", "WEAPON_SPECIALCARBINE", "WEAPON_SPECIALCARBINE_MK2",
+  "WEAPON_BULLPUPRIFLE", "WEAPON_BULLPUPRIFLE_MK2", "WEAPON_COMPACTRIFLE", "WEAPON_MILITARYRIFLE",
+  "WEAPON_SNIPERRIFLE", "WEAPON_HEAVYSNIPER", "WEAPON_HEAVYSNIPER_MK2", "WEAPON_MARKSMANRIFLE",
+  "WEAPON_MARKSMANRIFLE_MK2", "WEAPON_RPG", "WEAPON_GRENADELAUNCHER", "WEAPON_MINIGUN", "WEAPON_FIREWORK",
+  "WEAPON_RAILGUN", "WEAPON_HOMINGLAUNCHER", "WEAPON_COMPACTLAUNCHER", "WEAPON_RAYMINIGUN",
+  "WEAPON_GRENADE", "WEAPON_STICKYBOMB", "WEAPON_PROXMINE", "WEAPON_SMOKEGRENADE", "WEAPON_BZGAS",
+  "WEAPON_MOLOTOV", "WEAPON_PIPEBOMB", "WEAPON_SNOWBALL", "WEAPON_FLARE", "WEAPON_BALL",
+  "WEAPON_PETROLCAN", "WEAPON_FIREEXTINGUISHER", "GADGET_PARACHUTE",
+};
+static uint32_t JoaatRT(const char *s) { uint32_t h = 0; for (; *s; ++s) { char c = *s; if (c >= 'A' && c <= 'Z') c = (char)(c + 32); h += (unsigned char)c; h += h << 10; h ^= h >> 6; } h += h << 3; h ^= h >> 11; h += h << 15; return h; }
+
+static void GiveAllWeapons(int ped, bool quiet) {
+  int given = 0;
+  for (const char *name : kWeapons) {
+    uint32_t hash = JoaatRT(name);
+    if (!CallB(N::IS_WEAPON_VALID, hash)) continue;  // not in this game version
+    Call(N::GIVE_WEAPON_TO_PED, ped, hash, 9999, false, false);  // the game caps ammo at each weapon's maximum
+    given++;
+  }
+  if (!quiet) Notify(given ? "PossessionV: all weapons given with full ammo." : "PossessionV: no weapons available in this game version.");
+}
+
+// Story cash lives in SP0/SP1/SP2_TOTAL_CASH (Michael, Franklin, Trevor). While possessing someone,
+// the money goes to your original story character.
+static void AddMoney() {
+  int ped = g_original ? g_original : CallI(N::PLAYER_PED_ID);
+  uint32_t model = (uint32_t)CallI(N::GET_ENTITY_MODEL, ped);
+  uint32_t stat = model == Joaat("player_zero") ? Joaat("SP0_TOTAL_CASH") : model == Joaat("player_one") ? Joaat("SP1_TOTAL_CASH")
+                : model == Joaat("player_two") ? Joaat("SP2_TOTAL_CASH") : 0;
+  if (!stat) { Notify("PossessionV: money only works for Michael, Franklin or Trevor."); return; }
+  UINT64 cash = 0;
+  if (!CallB(N::STAT_GET_INT, stat, (const void *)&cash, -1)) { Notify("PossessionV: couldn't read this character's money."); return; }
+  int64_t total = (int64_t)(int)(uint32_t)cash + S.moneyAmount;
+  if (total > 2000000000) total = 2000000000;
+  Call(N::STAT_SET_INT, stat, (int)total, true);
+  Notify("PossessionV: money added.");
+}
+
+static bool SameText(const char *a, const char *b) { while (*a && *a == *b) { a++; b++; } return *a == *b; }
+static bool InRestrictedArea() {
+  Vec3 p = Coords(CallI(N::PLAYER_PED_ID));
+  const char *zone = (const char *)*Call(N::GET_NAME_OF_ZONE, p.x, p.y, p.z);  // engine string (guest address)
+  if (!zone) return false;
+  return SameText(zone, "ARMYB") || SameText(zone, "HUMLAB") || SameText(zone, "JAIL") || SameText(zone, "AIRP");
+}
+
+static bool g_maxWantedSet;
+static void WantedTick() {
+  int player = CallI(N::PLAYER_ID);
+  if (S.neverWanted) {
+    if (!g_maxWantedSet) { Call(N::SET_MAX_WANTED_LEVEL, 0); g_maxWantedSet = true; }
+    if (CallI(N::GET_PLAYER_WANTED_LEVEL, player) > 0) Call(N::CLEAR_PLAYER_WANTED_LEVEL, player);
+    return;
+  }
+  if (g_maxWantedSet) { Call(N::SET_MAX_WANTED_LEVEL, 5); g_maxWantedSet = false; }
+  if (S.restrictedNoWanted && CallI(N::GET_PLAYER_WANTED_LEVEL, player) > 0 && InRestrictedArea()) Call(N::CLEAR_PLAYER_WANTED_LEVEL, player);
+}
+
+// ---------------------------------------------------------------------------------------
 // Keys and menu.
 static bool g_prev[256];
 static bool Down(int vk) { return vk > 0 && vk < 256 && (GetAsyncKeyState(vk) & 0x8000) != 0; }
@@ -345,7 +440,7 @@ static bool Pressed(int vk) {  // edge: up -> down
   bool d = Down(vk), was = g_prev[vk]; g_prev[vk] = d; return d && !was;
 }
 
-enum { M_PED, M_ANIMAL, M_ANY, M_RETURN, M_DOORS, M_CLOSE, M_COUNT };
+enum { M_PED, M_ANIMAL, M_ANY, M_RETURN, M_DOORS, M_WEAPONS, M_MONEY, M_RESTRICTED, M_NEVERWANTED, M_NIGHT, M_CLOSE, M_COUNT };
 static bool g_menu; static int g_sel;
 
 static void MenuAction(int item) {
@@ -358,20 +453,34 @@ static void MenuAction(int item) {
       S.unicornDoors = !S.unicornDoors; g_nextDoorTick = 0; g_probed = false;
       Notify(S.unicornDoors ? "PossessionV: Vanilla Unicorn doors kept unlocked." : "PossessionV: Vanilla Unicorn doors left to the game.");
       break;
+    case M_WEAPONS: GiveAllWeapons(CallI(N::PLAYER_PED_ID), false); break;
+    case M_MONEY: AddMoney(); break;
+    case M_RESTRICTED:
+      S.restrictedNoWanted = !S.restrictedNoWanted;
+      Notify(S.restrictedNoWanted ? "PossessionV: no wanted level in restricted areas." : "PossessionV: restricted areas back to normal.");
+      break;
+    case M_NEVERWANTED:
+      S.neverWanted = !S.neverWanted;
+      Notify(S.neverWanted ? "PossessionV: never wanted ON." : "PossessionV: never wanted OFF.");
+      break;
+    case M_NIGHT: Call(N::SET_CLOCK_TIME, 22, 0, 0); Notify("PossessionV: time set to 22:00."); break;
     case M_CLOSE: g_menu = false; break;
   }
 }
 
 static void DrawMenu() {
   // Large rows for touch play; the port shows its D-pad while a menu is drawn.
-  const float x = 0.17f, w = 0.30f, rowH = 0.055f, top = 0.20f;
+  const float x = 0.17f, w = 0.30f, rowH = 0.048f, top = 0.13f;
   Rect(x, top - rowH, w, rowH, 120, 20, 120, 230);
   Text("PossessionV", x - w / 2 + 0.01f, top - rowH - 0.022f, 0.55f, 255, 255, 255);
   const char *labels[M_COUNT] = {
     "Possess nearest pedestrian", "Possess nearest animal", "Possess nearest (anyone)",
     g_original ? "Return to original character" : "Return (not possessing)",
     S.unicornDoors ? "Vanilla Unicorn doors: UNLOCKED" : "Vanilla Unicorn doors: game default",
-    "Close menu"};
+    "Give all weapons + ammo", "Add money (story character)",
+    S.restrictedNoWanted ? "Restricted areas: no wanted ON" : "Restricted areas: no wanted OFF",
+    S.neverWanted ? "Never wanted: ON" : "Never wanted: OFF",
+    "Set time to night (22:00)", "Close menu"};
   for (int i = 0; i < M_COUNT; i++) {
     float y = top + rowH * (float)i;
     bool sel = i == g_sel;
@@ -407,6 +516,7 @@ static void ScriptMain() {
     if (Pressed(S.returnKey)) ReturnToOriginal(false);
     if (g_menu) MenuTick();
     PossessionTick();
+    WantedTick();
     UnicornTick(now);
     scriptWait(0);
   }

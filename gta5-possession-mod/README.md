@@ -8,7 +8,7 @@ that port's own Script Hook V interpreter. It is a real 64-bit Windows DLL with 
 | `src/` | Source code (`PossessionV.cpp`, `shv.h`) and the default `PossessionV.ini` |
 | `lib/` | `.def` files used to generate import libraries for ScriptHookV / KERNEL32 / USER32 |
 | `build/` | Build output: `PossessionV.asi` |
-| `release/` | Installation ZIP: `PossessionV-1.0.zip` (`PossessionV.asi` + `PossessionV.ini`) |
+| `release/` | Installation ZIP: `PossessionV-1.1.zip` (`PossessionV.asi` + `PossessionV.ini`) |
 | `test/` | Static checks and an end-to-end run inside the port's interpreter |
 
 ## Features
@@ -30,12 +30,22 @@ that port's own Script Hook V interpreter. It is a real 64-bit Windows DLL with 
   It also unlocks any other door of the office or dressing-room model that it finds inside the club,
   and turns the club interior back on if the game has it disabled or capped. It uses the
   door-system hash if the game has registered the door, plus `SET_STATE_OF_CLOSEST_DOOR_OF_TYPE`.
+- **Unlocks** (menu): give all weapons with full ammo (each one checked with `IS_WEAPON_VALID`,
+  so weapons this game version lacks are skipped); add money to Michael, Franklin or Trevor
+  (`SP0/1/2_TOTAL_CASH`, `MoneyAmount` in the `.ini`); no wanted level inside Fort Zancudo,
+  Humane Labs, Bolingbroke and LSIA (zones `ARMYB`/`HUMLAB`/`JAIL`/`AIRP`, on by default);
+  a never-wanted toggle; set the time to 22:00.
+- **Mature content**: the port doesn't censor anything (its source has no content filter), so the
+  strip club dances, street prostitutes and the rest are already in the game as on PC. The mod opens
+  the club's doors and interior. Dancer activities are started by the game's own story scripts; those
+  depend on script globals, which the iOS port doesn't give to mods (`getGlobalPtr` returns 0), so
+  the mod can't force them earlier in the story.
 - **Touch menu** (F7): large rows drawn with `DRAW_RECT`. While the menu is on screen, the port
   shows its Mods D-pad. The mod reads Up/Down/Enter/Backspace and NumPad 8/2/5/0.
 
 ## Installing on iPhone (GTA V iOS port)
 
-1. Download `release/PossessionV-1.0.zip` to the iPhone (Files › Downloads).
+1. Download `release/PossessionV-1.1.zip` to the iPhone (Files › Downloads).
 2. In the app, go to **Settings › Mods › Install a mod…** and pick the ZIP. The app shows that it
    installs `PossessionV.asi` and `PossessionV.ini` as a script mod in their own Mods folder.
    Your other mods, including vehicle mods, are left as they are.
@@ -71,11 +81,11 @@ Verified here:
 - `build/PossessionV.asi` is a PE32+ x86-64 DLL with entry point `DllMain`. It has no TLS and no CRT.
   It imports only 6 Script Hook V functions plus `GetModuleFileNameA`, `GetPrivateProfileIntA` and
   `GetAsyncKeyState`. Each of these is in the port's import table (`app/Source/NativeASI.c`).
-- All 40 natives it calls are in the port's native table (`app/Scripts/asi_native_hashes.txt`).
+- All 50 natives it calls are in the port's native table (`app/Scripts/asi_native_hashes.txt`).
 - The port's own loader and interpreter (`NativeASI.c` + its vendored Blink) were built for Linux.
   In them, the mod loads, registers its script and reads its `.ini`; the port logs "names key 0x76 as
-  a menu key". With game commands answered by a simulated world, it passes 24 checks: possess a ped,
-  hop to an animal, return, menu navigation, auto-return on death, and door/interior calls. The port
+  a menu key". With game commands answered by a simulated world, it passes 32 checks: possess a ped,
+  hop to an animal, return, menu navigation, auto-return on death, door/interior calls, weapons, money, wanted level and time. The port
   logs no faults and no missing imports.
 - Workaround for a bug in the port: the port's Blink `OpCmppsd` writes `-1.0f` instead of an all-ones
   mask for `CMPSS`/`CMPPS`. Float compares that the compiler turns into branchless code therefore give

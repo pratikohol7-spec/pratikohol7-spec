@@ -40,6 +40,9 @@ static int blips[16], blipCount, nextBlip = 500;
 static int drawRects, drawTexts, notifications; static char lastNote[256];
 static int doorStateCalls, closestDoorCalls, doorFound, interiorDisabled = 1, interiorCapped = 1, objectProbes;
 static int changeCalls;
+static int weaponsGiven, wanted, maxWanted = 5, clockHour = 12; static int64_t cash[3] = {500, 500, 500};
+static uint64_t zoneStr;
+static uint32_t joaat(const char *s) { uint32_t h = 0; for (; *s; ++s) { char c = *s; if (c >= 'A' && c <= 'Z') c += 32; h += (unsigned char)c; h += h << 10; h ^= h >> 6; } h += h << 3; h ^= h >> 11; h += h << 15; return h; }
 static Ped *ped(int h) { for (int i = 0; i < pedCount; i++) if (peds[i].handle == h && peds[i].exists) return &peds[i]; return 0; }
 static void addPed(int h, float x, float y, float z, int type, int human, int dead) {
   peds[pedCount++] = (Ped){h, x, y, z, type, human, dead, 0, 0, 0, 0, 1};
@@ -101,6 +104,18 @@ static bool hostNative(uint64_t hash, uint64_t a, uint32_t n, uint64_t r) {
     case 0xCD015E5BB0D96A57ull: drawTexts++; return true;
     case 0x2ED7843F8F801023ull: notifications++; snprintf(lastNote, sizeof lastNote, "%s", pendingText); printf("[frame %3d] notification: %s\n", frame, pendingText); return true;
     case 0x9CD27B0045628463ull: ret(r, (uint64_t)(frame * 100)); return true;                               // GET_GAME_TIMER (100 ms per frame)
+    case 0x937C71165CF334B3ull: ret(r, (uint32_t)arg(a, 0) != joaat("WEAPON_RAYPISTOL")); return true;      // IS_WEAPON_VALID (one "missing" weapon)
+    case 0xBF0FD6E56C964FCBull: if (argi(a, 0) == playerPed && argi(a, 2) == 9999) weaponsGiven++; return true;  // GIVE_WEAPON_TO_PED
+    case 0x9F47B058362C84B5ull: ret(r, argi(a, 0) == 1 ? joaat("player_zero") : joaat("a_m_y_business_01")); return true;  // GET_ENTITY_MODEL
+    case 0x767FBC2AC802EF3Dull: { uint32_t st = (uint32_t)arg(a, 0); int i = st == joaat("SP0_TOTAL_CASH") ? 0 : st == joaat("SP1_TOTAL_CASH") ? 1 : st == joaat("SP2_TOTAL_CASH") ? 2 : -1;
+      if (i < 0) { ret(r, 0); return true; } int v = (int)cash[i]; memcpy(mem + arg(a, 1), &v, 4); ret(r, 1); return true; }  // STAT_GET_INT
+    case 0xB3271D7AB655B441ull: { uint32_t st = (uint32_t)arg(a, 0); if (st == joaat("SP0_TOTAL_CASH")) cash[0] = argi(a, 1); return true; }  // STAT_SET_INT
+    case 0xCD90657D4C30E1CAull: { if (!zoneStr) zoneStr = hostAlloc(16); Ped *p = ped(playerPed);                  // GET_NAME_OF_ZONE
+      strcpy((char *)mem + zoneStr, p && p->x < -1500 ? "ARMYB" : "STRIP"); ret(r, zoneStr); return true; }
+    case 0xE28E54788CE8F12Dull: ret(r, (uint32_t)wanted); return true;                                       // GET_PLAYER_WANTED_LEVEL
+    case 0xB302540597885499ull: wanted = 0; return true;                                                      // CLEAR_PLAYER_WANTED_LEVEL
+    case 0xAA5F02DB48D704B9ull: maxWanted = argi(a, 0); return true;                                          // SET_MAX_WANTED_LEVEL
+    case 0x47C3B5848C3E45D8ull: clockHour = argi(a, 0); return true;                                          // SET_CLOCK_TIME
   }
   printf("[frame %3d] UNHANDLED native 0x%016llx\n", frame, (unsigned long long)hash); unknownHashes++;
   return false;
@@ -186,6 +201,26 @@ int main(int argc, char **argv) {
   CHECK(drawRects == rects, "NumPad0 closes the menu");
   press(0x7A);
   CHECK(playerPed == 1, "F11 returns again");
+
+  printf("== unlocks menu\n");
+  // menu rows: 0 ped, 1 animal, 2 anyone, 3 return, 4 doors, 5 weapons, 6 money, 7 restricted, 8 never wanted, 9 night, 10 close
+  press(0x76); for (int i = 0; i < 5; i++) press(0x28); press(0x0D);
+  CHECK(weaponsGiven > 80, "Give all weapons: every valid weapon given with full ammo (invalid one skipped)");
+  press(0x28); press(0x0D);
+  CHECK(cash[0] == 500 + 1000000, "Add money: Michael's SP0_TOTAL_CASH goes up by MoneyAmount from the .ini");
+  wanted = 3; tick(2);
+  CHECK(wanted == 3, "wanted level kept outside restricted areas");
+  ped(1)->x = -2300.0f; tick(2);
+  CHECK(wanted == 0, "wanted level cleared inside Fort Zancudo (zone ARMYB)");
+  ped(1)->x = 115.0f;
+  press(0x28); press(0x28); press(0x0D);  // row 8: never wanted
+  wanted = 2; tick(2);
+  CHECK(maxWanted == 0 && wanted == 0, "Never wanted ON: max wanted 0 and wanted level cleared anywhere");
+  press(0x0D);  // toggle off again
+  CHECK(maxWanted == 5, "Never wanted OFF: max wanted level restored to 5");
+  press(0x28); press(0x0D);
+  CHECK(clockHour == 22, "Set time to night: clock set to 22:00");
+  press(0x08);
 
   uint64_t us, instr; pg_asi_stats(&us, &instr);
   printf("== interpreter: last tick %llu instructions, %llu us\n", (unsigned long long)instr, (unsigned long long)us);
