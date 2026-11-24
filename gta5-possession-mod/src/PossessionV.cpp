@@ -81,6 +81,12 @@ enum : UINT64 {
   SET_MAX_WANTED_LEVEL = 0xAA5F02DB48D704B9ull,
   SET_CLOCK_TIME = 0x47C3B5848C3E45D8ull,
   GET_ENTITY_MODEL = 0x9F47B058362C84B5ull,
+  DRAW_MARKER = 0x28477EC23D892089ull,
+  IS_ENTITY_A_MISSION_ENTITY = 0x0A7B270912999B3Cull,
+  IS_ENTITY_A_PED = 0x524AC5ECEA15343Eull,
+  IS_PED_FATALLY_INJURED = 0xD839450756ED5A80ull,
+  GET_STATE_OF_CLOSEST_DOOR_OF_TYPE = 0xEDC1A5B84AEF33FFull,
+  DOOR_SYSTEM_GET_DOOR_STATE = 0x160AA1B32F6139B8ull,
 };
 }
 
@@ -132,6 +138,13 @@ struct Settings {
   int possessPedKey = 120;    // F9
   int possessAnimalKey = 121; // F10
   int returnKey = 122;        // F11
+  int nextTargetKey = 116;    // F5: mark the next nearby ped as the target
+  int doorsKey = 119;         // F8: Vanilla Unicorn doors UNLOCK / LOCK (restore)
+  int modeKey = 123;          // F12: possession mode ON / OFF
+  bool possessionEnabled = true;
+  bool allowMissionPeds = false;  // peds other scripts own (story/mission characters) are skipped
+  bool showMarker = true;
+  bool clearWantedOnReturn = false;
   int maxDistance = 60;       // metres
   bool protectOriginal = true;
   bool autoReturnOnDeath = true;
@@ -154,6 +167,13 @@ static void LoadSettings() {
   S.possessPedKey = (int)GetPrivateProfileIntA("Keys", "PossessPedKey", S.possessPedKey, g_ini);
   S.possessAnimalKey = (int)GetPrivateProfileIntA("Keys", "PossessAnimalKey", S.possessAnimalKey, g_ini);
   S.returnKey = (int)GetPrivateProfileIntA("Keys", "ReturnKey", S.returnKey, g_ini);
+  S.nextTargetKey = (int)GetPrivateProfileIntA("Keys", "NextTargetKey", S.nextTargetKey, g_ini);
+  S.doorsKey = (int)GetPrivateProfileIntA("Keys", "DoorsKey", S.doorsKey, g_ini);
+  S.modeKey = (int)GetPrivateProfileIntA("Keys", "PossessionModeKey", S.modeKey, g_ini);
+  S.possessionEnabled = GetPrivateProfileIntA("Possession", "Enabled", 1, g_ini) != 0;
+  S.allowMissionPeds = GetPrivateProfileIntA("Possession", "AllowMissionPeds", 0, g_ini) != 0;
+  S.showMarker = GetPrivateProfileIntA("Possession", "ShowTargetMarker", 1, g_ini) != 0;
+  S.clearWantedOnReturn = GetPrivateProfileIntA("Possession", "ClearWantedOnReturn", 0, g_ini) != 0;
   S.maxDistance = (int)GetPrivateProfileIntA("Possession", "MaxDistance", S.maxDistance, g_ini);
   S.protectOriginal = GetPrivateProfileIntA("Possession", "ProtectOriginal", 1, g_ini) != 0;
   S.autoReturnOnDeath = GetPrivateProfileIntA("Possession", "AutoReturnOnDeath", 1, g_ini) != 0;
@@ -190,7 +210,8 @@ static void Rect(float x, float y, float w, float h, int r, int g, int b, int a)
 }
 
 // ---------------------------------------------------------------------------------------
-// Possession.
+// Possession: you take over a real pedestrian with CHANGE_PLAYER_PED. The ped keeps its own
+// model, clothes and appearance; the game hands it the player's controls and camera.
 enum Kind { KIND_HUMAN, KIND_ANIMAL, KIND_ANY };
 static const int PED_TYPE_ANIMAL = 28;
 
@@ -201,7 +222,21 @@ static bool g_originalLostTold;
 static bool Alive(int ped) { return ped && CallB(N::DOES_ENTITY_EXIST, ped) && !CallB(N::IS_ENTITY_DEAD, ped, false); }
 static bool IsAnimal(int ped) { return CallI(N::GET_PED_TYPE, ped) == PED_TYPE_ANIMAL || !CallB(N::IS_PED_HUMAN, ped); }
 
-static int FindNearest(Kind kind) {
+// Everything that must be true before the game is asked to switch: a living, non-player ped
+// that isn't your original character and (unless allowed) isn't owned by a mission script.
+static bool CanPossess(int ped, int me, Kind kind) {
+  if (!ped || ped == me || ped == g_original) return false;
+  if (!CallB(N::DOES_ENTITY_EXIST, ped) || !CallB(N::IS_ENTITY_A_PED, ped)) return false;
+  if (CallB(N::IS_ENTITY_DEAD, ped, false) || CallB(N::IS_PED_FATALLY_INJURED, ped)) return false;
+  if (CallB(N::IS_PED_A_PLAYER, ped)) return false;
+  if (!S.allowMissionPeds && CallB(N::IS_ENTITY_A_MISSION_ENTITY, ped)) return false;
+  if (kind != KIND_ANY) { bool animal = IsAnimal(ped); if ((kind == KIND_HUMAN) == animal) return false; }
+  return true;
+}
+
+// Nearby candidates, nearest first (distances compared as integers, see Key()).
+static int g_targets[16], g_targetCount, g_selected, g_nextTargetRefresh;
+static int Candidates(Kind kind, int *out, int cap) {
   int me = CallI(N::PLAYER_PED_ID);
   Vec3 at = Coords(me);
   const int CAP = 64;
@@ -212,18 +247,41 @@ static int FindNearest(Kind kind) {
   if (count < 0) count = 0;
   if (count > CAP) count = CAP;
   const uint32_t maxKey = Key((float)(S.maxDistance * S.maxDistance));
-  uint32_t best = 0xFFFFFFFFu;
-  int found = 0;
+  uint32_t keys[16]; int n = 0;
   for (int i = 0; i < count; i++) {
     int ped = (int)(uint32_t)list[i + 1];
-    if (!ped || ped == me || ped == g_original) continue;
-    if (!Alive(ped) || CallB(N::IS_PED_A_PLAYER, ped)) continue;
-    bool animal = IsAnimal(ped);
-    if ((kind == KIND_HUMAN && animal) || (kind == KIND_ANIMAL && !animal)) continue;
+    if (!CanPossess(ped, me, kind)) continue;
     uint32_t d = Key(Dist2(at, Coords(ped)));
-    if (d <= maxKey && d < best) { best = d; found = ped; }
+    if (d > maxKey) continue;
+    int pos = n < cap ? n : cap;                 // insertion sort, keep the nearest `cap`
+    while (pos > 0 && keys[pos - 1] > d) { if (pos < cap) { keys[pos] = keys[pos - 1]; out[pos] = out[pos - 1]; } pos--; }
+    if (pos < cap) { keys[pos] = d; out[pos] = ped; if (n < cap) n++; }
   }
-  return found;
+  return n;
+}
+static int FindNearest(Kind kind) { int one[1]; return Candidates(kind, one, 1) ? one[0] : 0; }
+
+static void RefreshTargets() {
+  g_targetCount = Candidates(KIND_ANY, g_targets, 16);
+  bool kept = false;
+  for (int i = 0; i < g_targetCount; i++) if (g_targets[i] == g_selected) kept = true;
+  if (!kept) g_selected = g_targetCount ? g_targets[0] : 0;  // default: the nearest
+}
+static void NextTarget() {
+  if (!S.possessionEnabled) { Notify("PossessionV: possession mode is OFF."); return; }
+  RefreshTargets();
+  if (!g_targetCount) { g_selected = 0; Notify("PossessionV: nobody nearby to target."); return; }
+  int at = 0; for (int i = 0; i < g_targetCount; i++) if (g_targets[i] == g_selected) at = i;
+  g_selected = g_targets[(at + 1) % g_targetCount];
+}
+static void TargetTick(int now) {
+  if (!S.possessionEnabled) { g_selected = 0; return; }
+  if (now >= g_nextTargetRefresh) { g_nextTargetRefresh = now + 500; RefreshTargets(); }
+  if (!S.showMarker || !g_selected || !CallB(N::DOES_ENTITY_EXIST, g_selected)) return;
+  Vec3 p = Coords(g_selected);
+  // Marker type 0 (upside-down cone) floating over the target's head, facing the camera.
+  Call(N::DRAW_MARKER, 0, p.x, p.y, p.z + 1.25f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.3f, 0.3f, 0.3f,
+       255, 60, 200, 200, true, true, 2, false, (const void *)0, (const void *)0, false);
 }
 
 static void ReleasePed(int ped) {
@@ -249,14 +307,10 @@ static void RemoveOriginalBlip() {
 }
 
 static void GiveAllWeapons(int ped, bool quiet);
-static void Possess(Kind kind) {
+static void PossessPed(int target) {
   int me = CallI(N::PLAYER_PED_ID);
   if (!Alive(me)) { Notify("PossessionV: you can't possess anyone while dead."); return; }
-  int target = FindNearest(kind);
-  if (!target) {
-    Notify(kind == KIND_ANIMAL ? "PossessionV: no animal nearby." : kind == KIND_HUMAN ? "PossessionV: no pedestrian nearby." : "PossessionV: nobody nearby.");
-    return;
-  }
+  if (!CanPossess(target, me, KIND_ANY)) { Notify("PossessionV: that ped can't be possessed (gone, dead, a player or a mission character)."); return; }
   int player = CallI(N::PLAYER_ID);
   bool first = g_original == 0;
   Call(N::SET_ENTITY_AS_MISSION_ENTITY, target, true, true);
@@ -270,8 +324,24 @@ static void Possess(Kind kind) {
   }
   if (first) { g_original = me; g_originalLostTold = false; ParkOriginal(me); }
   else ReleasePed(me);  // hopping from one possessed body to the next: let the old one go
+  g_selected = 0; g_nextTargetRefresh = 0;
   Notify(IsAnimal(target) ? "PossessionV: animal possessed." : "PossessionV: pedestrian possessed.");
   if (S.autoWeapons && !IsAnimal(target)) GiveAllWeapons(target, true);
+}
+static void Possess(Kind kind) {
+  if (!S.possessionEnabled) { Notify("PossessionV: possession mode is OFF (turn it on in the menu)."); return; }
+  int target = FindNearest(kind);
+  if (!target) {
+    Notify(kind == KIND_ANIMAL ? "PossessionV: no animal nearby." : kind == KIND_HUMAN ? "PossessionV: no pedestrian nearby." : "PossessionV: nobody nearby.");
+    return;
+  }
+  PossessPed(target);
+}
+static void PossessTarget() {  // the marked ped, or the nearest anyone
+  if (!S.possessionEnabled) { Notify("PossessionV: possession mode is OFF (turn it on in the menu)."); return; }
+  int me = CallI(N::PLAYER_PED_ID);
+  if (g_selected && CanPossess(g_selected, me, KIND_ANY)) PossessPed(g_selected);
+  else Possess(KIND_ANY);
 }
 
 static void ReturnToOriginal(bool quiet) {
@@ -281,14 +351,16 @@ static void ReturnToOriginal(bool quiet) {
     RemoveOriginalBlip(); g_original = 0; return;
   }
   int body = CallI(N::PLAYER_PED_ID);
-  Call(N::CHANGE_PLAYER_PED, CallI(N::PLAYER_ID), g_original, false, false);
-  if (CallI(N::PLAYER_PED_ID) != g_original) { Notify("PossessionV: the game refused to switch back."); return; }
+  int player = CallI(N::PLAYER_ID);
+  Call(N::CHANGE_PLAYER_PED, player, g_original, false, false);
+  if (CallI(N::PLAYER_PED_ID) != g_original) { Notify("PossessionV: the game refused to switch back; try again in a moment."); return; }
   Call(N::SET_ENTITY_INVINCIBLE, g_original, false);
   Call(N::SET_BLOCKING_OF_NON_TEMPORARY_EVENTS, g_original, false);
   Call(N::CLEAR_PED_TASKS, g_original);
   RemoveOriginalBlip();
   if (body != g_original) ReleasePed(body);
-  g_original = 0;
+  g_original = 0; g_selected = 0; g_nextTargetRefresh = 0;
+  if (S.clearWantedOnReturn) Call(N::CLEAR_PLAYER_WANTED_LEVEL, player);
   if (!quiet) Notify("PossessionV: back to your original character.");
 }
 
@@ -303,7 +375,13 @@ static void PossessionTick() {
 
 // ---------------------------------------------------------------------------------------
 // Vanilla Unicorn doors. Model names and positions: the four strip-club doors used by
-// community door-lock configs (front, back, office, dressing room).
+// community door-lock configs (front, back, office, dressing room), plus other doors of the
+// office/dressing-room models found by probing inside the club.
+//
+// UNLOCK records each door's original state the first time it is changed: its door-system
+// state (DOOR_SYSTEM_GET_DOOR_STATE, when the game has registered the door) and its
+// closest-door lock flag (GET_STATE_OF_CLOSEST_DOOR_OF_TYPE, when the door object is loaded).
+// LOCK writes those recorded states back, so the game's original door behaviour returns.
 struct Door { uint32_t model; float x, y, z; const char *name; };
 static const Door kDoors[] = {
   {Joaat("prop_strip_door_01"), 127.9552f, -1298.503f, 29.41962f, "front entrance"},
@@ -314,19 +392,41 @@ static const Door kDoors[] = {
 static const uint32_t kInteriorModels[] = {Joaat("v_ilev_roc_door2"), Joaat("v_ilev_door_orangesolid")};
 static const Vec3 kClub = {112.0f, -1290.0f, 29.3f};
 
-// Extra internal doors of the same models found by probing the club (other dressing rooms).
-struct Found { uint32_t model; Vec3 at; };
-static Found g_extra[16]; static int g_extraCount; static bool g_probed;
+struct DoorRec {
+  uint32_t model; Vec3 at;
+  bool sysRecorded; uint32_t sysHash; int sysState;   // door system
+  bool lockRecorded; bool wasLocked;                   // closest door of type
+};
+static DoorRec g_doors[20]; static int g_doorCount; static bool g_probed;
+static void InitDoors() {
+  g_doorCount = 0;
+  for (const Door &d : kDoors) g_doors[g_doorCount++] = DoorRec{d.model, Vec3{d.x, d.y, d.z}, false, 0, 0, false, false};
+}
 
-static void UnlockAt(uint32_t model, float x, float y, float z) {
+static void UnlockDoor(DoorRec &d) {
   UINT64 doorHash = 0;
-  if (CallB(N::DOOR_SYSTEM_FIND_EXISTING_DOOR, x, y, z, model, (const void *)&doorHash) && (uint32_t)doorHash)
-    Call(N::DOOR_SYSTEM_SET_DOOR_STATE, (uint32_t)doorHash, 0, false, true);  // 0 = unlocked
-  Call(N::SET_STATE_OF_CLOSEST_DOOR_OF_TYPE, model, x, y, z, false, 0.0f, false);
+  bool registered = CallB(N::DOOR_SYSTEM_FIND_EXISTING_DOOR, d.at.x, d.at.y, d.at.z, d.model, (const void *)&doorHash) && (uint32_t)doorHash;
+  if (registered && !d.sysRecorded) { d.sysHash = (uint32_t)doorHash; d.sysState = CallI(N::DOOR_SYSTEM_GET_DOOR_STATE, d.sysHash); d.sysRecorded = true; }
+  if (!d.lockRecorded && CallI(N::GET_CLOSEST_OBJECT_OF_TYPE, d.at.x, d.at.y, d.at.z, 2.0f, d.model, false, false, false)) {
+    UINT64 locked = 0, heading = 0;
+    Call(N::GET_STATE_OF_CLOSEST_DOOR_OF_TYPE, d.model, d.at.x, d.at.y, d.at.z, (const void *)&locked, (const void *)&heading);
+    d.wasLocked = (uint32_t)locked != 0; d.lockRecorded = true;
+  }
+  if (registered) Call(N::DOOR_SYSTEM_SET_DOOR_STATE, (uint32_t)doorHash, 0, false, true);  // 0 = unlocked
+  Call(N::SET_STATE_OF_CLOSEST_DOOR_OF_TYPE, d.model, d.at.x, d.at.y, d.at.z, false, 0.0f, false);
+}
+static int RestoreDoors() {
+  int restored = 0;
+  for (int i = 0; i < g_doorCount; i++) {
+    DoorRec &d = g_doors[i];
+    if (d.sysRecorded) { Call(N::DOOR_SYSTEM_SET_DOOR_STATE, d.sysHash, d.sysState, false, true); d.sysRecorded = false; restored++; }
+    if (d.lockRecorded) { Call(N::SET_STATE_OF_CLOSEST_DOOR_OF_TYPE, d.model, d.at.x, d.at.y, d.at.z, d.wasLocked, 0.0f, false); d.lockRecorded = false; restored++; }
+  }
+  return restored;
 }
 
 static void ProbeExtraDoors() {
-  g_probed = true; g_extraCount = 0;
+  g_probed = true;
   for (float x = 95.0f; x <= 130.0f; x += 5.0f)
     for (float y = -1305.0f; y <= -1280.0f; y += 5.0f)
       for (uint32_t model : kInteriorModels) {
@@ -334,28 +434,48 @@ static void ProbeExtraDoors() {
         if (!obj || !CallB(N::DOES_ENTITY_EXIST, obj)) continue;
         Vec3 at = Coords(obj);
         bool known = false;
-        for (const Door &d : kDoors) if (Key(Dist2(at, Vec3{d.x, d.y, d.z})) < Key(1.0f)) known = true;
-        for (int i = 0; i < g_extraCount; i++) if (Key(Dist2(at, g_extra[i].at)) < Key(1.0f)) known = true;
-        if (!known && g_extraCount < 16) g_extra[g_extraCount++] = Found{model, at};
+        for (int i = 0; i < g_doorCount; i++) if (Key(Dist2(at, g_doors[i].at)) < Key(1.0f)) known = true;
+        if (!known && g_doorCount < 20) g_doors[g_doorCount++] = DoorRec{model, at, false, 0, 0, false, false};
       }
 }
 
+// Interior flags we changed, restored when you're outside the club.
+static int g_interior; static bool g_interiorWasDisabled, g_interiorWasCapped, g_interiorChanged, g_interiorRestorePending;
 static int g_nextDoorTick;
 static void UnicornTick(int now) {
-  if (!S.unicornDoors || now < g_nextDoorTick) return;
+  if (now < g_nextDoorTick) return;
   g_nextDoorTick = now + 1000;
   Vec3 me = Coords(CallI(N::PLAYER_PED_ID));
-  if (Key(Dist2(me, kClub)) > Key(120.0f * 120.0f)) { g_probed = false; return; }  // only near the club
+  uint32_t d2 = Key(Dist2(me, kClub));
+  if (!S.unicornDoors) {
+    if (g_interiorRestorePending && d2 > Key(40.0f * 40.0f)) {
+      if (g_interiorWasDisabled) Call(N::DISABLE_INTERIOR, g_interior, true);
+      if (g_interiorWasCapped) Call(N::CAP_INTERIOR, g_interior, true);
+      g_interiorRestorePending = false; g_interiorChanged = false;
+    }
+    return;
+  }
+  if (d2 > Key(120.0f * 120.0f)) { g_probed = false; return; }  // only near the club
   if (S.unicornInterior) {
     int interior = CallI(N::GET_INTERIOR_AT_COORDS, kClub.x, kClub.y, kClub.z);
     if (interior) {
-      if (CallB(N::IS_INTERIOR_DISABLED, interior)) Call(N::DISABLE_INTERIOR, interior, false);
-      if (CallB(N::IS_INTERIOR_CAPPED, interior)) Call(N::CAP_INTERIOR, interior, false);
+      bool disabled = CallB(N::IS_INTERIOR_DISABLED, interior), capped = CallB(N::IS_INTERIOR_CAPPED, interior);
+      if ((disabled || capped) && !g_interiorChanged) { g_interior = interior; g_interiorWasDisabled = disabled; g_interiorWasCapped = capped; g_interiorChanged = true; }
+      if (disabled) Call(N::DISABLE_INTERIOR, interior, false);
+      if (capped) Call(N::CAP_INTERIOR, interior, false);
     }
   }
-  for (const Door &d : kDoors) UnlockAt(d.model, d.x, d.y, d.z);
-  if (!g_probed && Key(Dist2(me, kClub)) < Key(40.0f * 40.0f)) ProbeExtraDoors();  // interior streamed in
-  for (int i = 0; i < g_extraCount; i++) UnlockAt(g_extra[i].model, g_extra[i].at.x, g_extra[i].at.y, g_extra[i].at.z);
+  if (!g_probed && d2 < Key(40.0f * 40.0f)) ProbeExtraDoors();  // interior streamed in
+  for (int i = 0; i < g_doorCount; i++) UnlockDoor(g_doors[i]);
+}
+
+static void SetDoors(bool unlock) {
+  S.unicornDoors = unlock; g_nextDoorTick = 0;
+  if (unlock) { g_interiorRestorePending = false; Notify("PossessionV: Vanilla Unicorn doors UNLOCKED (kept open near the club)."); return; }
+  int n = RestoreDoors();
+  if (g_interiorChanged) g_interiorRestorePending = true;
+  Notify(n ? "PossessionV: Vanilla Unicorn doors LOCKED: original door states restored."
+           : "PossessionV: Vanilla Unicorn doors left to the game (nothing had been changed yet).");
 }
 
 // ---------------------------------------------------------------------------------------
@@ -440,19 +560,22 @@ static bool Pressed(int vk) {  // edge: up -> down
   bool d = Down(vk), was = g_prev[vk]; g_prev[vk] = d; return d && !was;
 }
 
-enum { M_PED, M_ANIMAL, M_ANY, M_RETURN, M_DOORS, M_WEAPONS, M_MONEY, M_RESTRICTED, M_NEVERWANTED, M_NIGHT, M_CLOSE, M_COUNT };
+enum { M_MODE, M_TARGET, M_NEXT, M_ANIMAL, M_RETURN, M_DOORS, M_WEAPONS, M_MONEY, M_RESTRICTED, M_NEVERWANTED, M_NIGHT, M_CLOSE, M_COUNT };
 static bool g_menu; static int g_sel;
+
+static void ToggleMode() {
+  S.possessionEnabled = !S.possessionEnabled; g_selected = 0; g_nextTargetRefresh = 0;
+  Notify(S.possessionEnabled ? "PossessionV: pedestrian possession ON." : "PossessionV: pedestrian possession OFF (you can still return to your original).");
+}
 
 static void MenuAction(int item) {
   switch (item) {
-    case M_PED: Possess(KIND_HUMAN); break;
+    case M_MODE: ToggleMode(); break;
+    case M_TARGET: PossessTarget(); break;
+    case M_NEXT: NextTarget(); break;
     case M_ANIMAL: Possess(KIND_ANIMAL); break;
-    case M_ANY: Possess(KIND_ANY); break;
     case M_RETURN: ReturnToOriginal(false); break;
-    case M_DOORS:
-      S.unicornDoors = !S.unicornDoors; g_nextDoorTick = 0; g_probed = false;
-      Notify(S.unicornDoors ? "PossessionV: Vanilla Unicorn doors kept unlocked." : "PossessionV: Vanilla Unicorn doors left to the game.");
-      break;
+    case M_DOORS: SetDoors(!S.unicornDoors); break;
     case M_WEAPONS: GiveAllWeapons(CallI(N::PLAYER_PED_ID), false); break;
     case M_MONEY: AddMoney(); break;
     case M_RESTRICTED:
@@ -469,24 +592,25 @@ static void MenuAction(int item) {
 }
 
 static void DrawMenu() {
-  // Large rows for touch play; the port shows its D-pad while a menu is drawn.
-  const float x = 0.17f, w = 0.30f, rowH = 0.048f, top = 0.13f;
+  // Left side, large rows for touch play; the port shows its D-pad while a menu is drawn.
+  const float x = 0.17f, w = 0.30f, rowH = 0.045f, top = 0.12f;
   Rect(x, top - rowH, w, rowH, 120, 20, 120, 230);
   Text("PossessionV", x - w / 2 + 0.01f, top - rowH - 0.022f, 0.55f, 255, 255, 255);
   const char *labels[M_COUNT] = {
-    "Possess nearest pedestrian", "Possess nearest animal", "Possess nearest (anyone)",
-    g_original ? "Return to original character" : "Return (not possessing)",
-    S.unicornDoors ? "Vanilla Unicorn doors: UNLOCKED" : "Vanilla Unicorn doors: game default",
+    S.possessionEnabled ? "Pedestrian Possession: ON" : "Pedestrian Possession: OFF",
+    "Possess target (marked ped)", "Next target", "Possess nearest animal",
+    g_original ? "Return to Original Player" : "Return to Original Player (not possessing)",
+    S.unicornDoors ? "Vanilla Unicorn Doors: UNLOCKED" : "Vanilla Unicorn Doors: LOCKED (game)",
     "Give all weapons + ammo", "Add money (story character)",
     S.restrictedNoWanted ? "Restricted areas: no wanted ON" : "Restricted areas: no wanted OFF",
     S.neverWanted ? "Never wanted: ON" : "Never wanted: OFF",
-    "Set time to night (22:00)", "Close menu"};
+    "Set time to night (22:00)", "Close Menu"};
   for (int i = 0; i < M_COUNT; i++) {
     float y = top + rowH * (float)i;
     bool sel = i == g_sel;
     Rect(x, y, w, rowH - 0.004f, sel ? 255 : 0, sel ? 255 : 0, sel ? 255 : 0, sel ? 220 : 170);
     int c = sel ? 0 : 255;
-    Text(labels[i], x - w / 2 + 0.01f, y - 0.018f, 0.42f, c, c, c);
+    Text(labels[i], x - w / 2 + 0.01f, y - 0.017f, 0.40f, c, c, c);
   }
   Text("Up/Down move  -  Enter select  -  Back close", x - w / 2 + 0.01f, top + rowH * M_COUNT - 0.015f, 0.30f, 230, 230, 230);
 }
@@ -507,15 +631,20 @@ static void MenuTick() {
 // ---------------------------------------------------------------------------------------
 static void ScriptMain() {
   LoadSettings();
+  InitDoors();
   Notify("PossessionV loaded. Open the menu from the Mods keys (F7).");
   for (;;) {
     int now = CallI(N::GET_GAME_TIMER);
     if (Pressed(S.menuKey)) { g_menu = !g_menu; g_sel = 0; }
-    if (Pressed(S.possessPedKey)) Possess(KIND_HUMAN);
+    if (Pressed(S.possessPedKey)) PossessTarget();
     if (Pressed(S.possessAnimalKey)) Possess(KIND_ANIMAL);
     if (Pressed(S.returnKey)) ReturnToOriginal(false);
+    if (Pressed(S.nextTargetKey)) NextTarget();
+    if (Pressed(S.doorsKey)) SetDoors(!S.unicornDoors);
+    if (Pressed(S.modeKey)) ToggleMode();
     if (g_menu) MenuTick();
     PossessionTick();
+    TargetTick(now);
     WantedTick();
     UnicornTick(now);
     scriptWait(0);
